@@ -566,4 +566,5 @@ if __name__ == "__main__":
     serial_port = "COM8"  #Serial port for Arduino
     root = tk.Tk()
     app = EMGRecorderApp(root, serial_port)
+    print("helo")
     root.mainloop()
