@@ -567,4 +567,5 @@ if __name__ == "__main__":
     root = tk.Tk()
     app = EMGRecorderApp(root, serial_port)
     print("helo")
+    #this is a test
     root.mainloop()
