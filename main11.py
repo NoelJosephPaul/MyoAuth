@@ -1,3 +1,5 @@
+#main9.py de 3rd version.. applied KFD to increase the distance between the feature vectors...
+
 #main8.py de 2 second version
 
 #main5 cont and separate login and register
@@ -24,6 +26,8 @@ import pygame  # Import pygame library
 import imageio
 from ttkthemes import ThemedStyle
 from tkinter import font
+from sklearn.discriminant_analysis import LinearDiscriminantAnalysis
+from sklearn.preprocessing import LabelEncoder
 
 
 class EMGRecorderApp:
@@ -407,23 +411,27 @@ class EMGRecorderApp:
         df = pd.read_csv(input_file)
         df['Features'] = df['Features'].apply(lambda x: eval(x))  # Convert string to list
 
-        # Assuming 'Username' is the column containing user names
-        unique_users = df['Username'].unique()
+        # Use LabelEncoder to convert usernames to numerical labels
+        label_encoder = LabelEncoder()
+        df['Class'] = label_encoder.fit_transform(df['Username'])
 
-        # Create testing dataset with one feature vector per user
+        # Assuming 'Class' is the column containing numerical labels
+        unique_classes = df['Class'].unique()
+
+        # Create testing dataset with one feature vector per class
         testing_data = []
-        for user in unique_users:
-            user_data = df[df['Username'] == user].sample(1)  # Select one random row for each user
-            testing_data.append(user_data)
+        for class_label in unique_classes:
+            class_data = df[df['Class'] == class_label].sample(1)  # Select one random row for each class
+            testing_data.append(class_data)
 
         testing_df = pd.concat(testing_data)
         training_df = df.drop(testing_df.index)
 
         # Extract features and labels from training and testing datasets
         X_train = np.vstack(training_df['Features'])
-        y_train = training_df['Username']
+        y_train = training_df['Class']
         X_test = np.vstack(testing_df['Features'])
-        y_test = testing_df['Username']
+        y_test = testing_df['Class']
 
         print(X_train)
         print(y_train)
@@ -434,17 +442,21 @@ class EMGRecorderApp:
         X_train_scaled = self.scaler.fit_transform(X_train)
         X_test_scaled = self.scaler.transform(X_test)
 
+        # Apply KFD transformation to training and testing data
+        X_train_transformed = self.kfd_transform(X_train_scaled, y_train)
+        X_test_transformed = self.kfd_transform(X_test_scaled, y_test)
+
         # Create and train the KNN classifier
         print("Training KNN classifier...")
         self.knn_classifier = KNeighborsClassifier(n_neighbors=1, metric='manhattan')
-        self.knn_classifier.fit(X_train_scaled, y_train)
+        self.knn_classifier.fit(X_train_transformed, y_train)
 
         # Print training accuracy
-        training_accuracy = self.knn_classifier.score(X_train_scaled, y_train)
+        training_accuracy = self.knn_classifier.score(X_train_transformed, y_train)
         print(f"Training Accuracy: {training_accuracy}")
 
         # Print testing accuracy
-        testing_accuracy = self.knn_classifier.score(X_test_scaled, y_test)
+        testing_accuracy = self.knn_classifier.score(X_test_transformed, y_test)
         print(f"Testing Accuracy: {testing_accuracy}")
 
         messagebox.showinfo("Success", "KNN Classifier Trained Successfully!")
@@ -457,6 +469,11 @@ class EMGRecorderApp:
         classifier_filename = "knn_classifier.joblib"
         joblib.dump(self.knn_classifier, classifier_filename)
         print(f"Trained classifier saved to {classifier_filename}")
+
+    def kfd_transform(self, X, y):
+        lda = LinearDiscriminantAnalysis(n_components=2)
+        X_transformed = lda.fit_transform(X, y)
+        return X_transformed
 
 
     def load_classifier(self):
@@ -478,7 +495,6 @@ class EMGRecorderApp:
 
 
     def verify_person(self):
-
         if not self.knn_classifier:
             messagebox.showinfo("Error", "Please train the classifier first.")
             return
@@ -488,7 +504,7 @@ class EMGRecorderApp:
         if not user_name:
             tk.messagebox.showinfo("Error", "Please enter Username.")
             return
-        
+
         self.clear_window()
 
         self.data_thread = threading.Thread(target=self.record_emg_for_verification, args=(user_name,))
@@ -497,7 +513,7 @@ class EMGRecorderApp:
         countup_label = tk.Label(self.root, text="", font=("Helvetica", 12), background="white")
         countup_label.place(relx=0.5, rely=0.2, anchor='center')
 
-        self.verify_countup = threading.Thread(target=self.verify_countdown, args=(2,countup_label))
+        self.verify_countup = threading.Thread(target=self.verify_countdown, args=(2, countup_label))
         self.verify_countup.start()
 
     def verify_countdown(self, seconds, countup_label):
@@ -520,7 +536,7 @@ class EMGRecorderApp:
             start_time = time.time()
             emg_values = []
 
-            while time.time() - start_time < 2:  # Record for 5 seconds for verification
+            while time.time() - start_time < 2:  # Record for 2 seconds for verification
                 try:
                     line = ser.readline().decode().strip()
                     if line:
@@ -534,41 +550,42 @@ class EMGRecorderApp:
 
         # Convert EMG signals to feature vector
         features = self.calculate_features(emg_values)
-        #print(features)
+
+        # Apply KFD transformation
+        features_transformed = self.kfd_transform(features)
 
         # Standardize the feature values
-        features_scaled = self.scaler.transform([features])
-        #print(features_scaled)
+        features_scaled = self.scaler.transform([features_transformed])
 
-        #Predict the person using the trained KNN classifier
+        # Predict the person using the trained KNN classifier
         predicted_person = self.knn_classifier.predict(features_scaled)
         print(predicted_person)
 
         self.clear_window()
 
-        self.verification_label = ttk.Label(self.root, text="Verification Result", font=("Helvetica", 14,"bold"), background="white",foreground="green")
+        self.verification_label = ttk.Label(self.root, text="Verification Result", font=("Helvetica", 14, "bold"),
+                                            background="white", foreground="green")
         self.verification_label.place(relx=0.5, rely=0.1, anchor='center')
 
-        self.result_label = ttk.Label(self.root, text="", font=("Helvetica", 14,"bold"), background="white",foreground="black")
+        self.result_label = ttk.Label(self.root, text="", font=("Helvetica", 14, "bold"), background="white",
+                                    foreground="black")
         self.result_label.place(relx=0.5, rely=0.3, anchor='center')
 
-        self.image_label = tk.Label(self.root,background="white")
+        self.image_label = tk.Label(self.root, background="white")
         self.image_label.place(relx=0.5, rely=0.47, anchor='center')
 
         self.back_button = ttk.Button(self.root, text="Back", command=self.show_main_window)
         self.back_button.place(relx=0.5, rely=0.65, anchor='center', width=150, height=35)
-    
+
         if predicted_person == user_name:
-            #messagebox.showinfo("Verification Result", f"Person Verified: {predicted_person}")
             image_path = 'tick2.png'
             audio_path = 'myoauthintro.mp3'
-            self.result_label.config(text=f"Authentication success. Identified Person: {predicted_person}")
+            self.result_label.config(
+                text=f"Authentication success. Identified Person: {predicted_person}")
         else:
-            #messagebox.showinfo("Verification Result", "Authentication Failed")
             image_path = 'wrong.png'
             audio_path = 'wrong.mp3'
             self.result_label.config(text="Authentication failed")
-
 
         original_image = Image.open(image_path)
         resized_image = original_image.resize((100, 100), Image.LANCZOS)
@@ -578,7 +595,7 @@ class EMGRecorderApp:
         # Play audio
         pygame.init()
         pygame.mixer.music.load(audio_path)  # Replace with your audio file path
-        pygame.mixer.music.play(0,0,1)
+        pygame.mixer.music.play(0, 0, 1)
 
         
 if __name__ == "__main__":

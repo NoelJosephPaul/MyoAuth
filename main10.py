@@ -1,3 +1,5 @@
+#main9.py de 2nd version...brought in a threshold distance for verification beyond which the user declared as none
+
 #main8.py de 2 second version
 
 #main5 cont and separate login and register
@@ -520,7 +522,7 @@ class EMGRecorderApp:
             start_time = time.time()
             emg_values = []
 
-            while time.time() - start_time < 2:  # Record for 5 seconds for verification
+            while time.time() - start_time < 2:  # Record for 2 seconds for verification
                 try:
                     line = ser.readline().decode().strip()
                     if line:
@@ -534,40 +536,55 @@ class EMGRecorderApp:
 
         # Convert EMG signals to feature vector
         features = self.calculate_features(emg_values)
-        #print(features)
 
         # Standardize the feature values
         features_scaled = self.scaler.transform([features])
-        #print(features_scaled)
 
-        #Predict the person using the trained KNN classifier
-        predicted_person = self.knn_classifier.predict(features_scaled)
-        print(predicted_person)
+        # Predict the person using the trained KNN classifier
+        distances, indices = self.knn_classifier.kneighbors(features_scaled, n_neighbors=1)
+
+        # Set a threshold distance
+        threshold_distance = 5.0  # Adjust this threshold as needed
+
+        if distances[0][0] < threshold_distance:
+            predicted_person = self.knn_classifier.classes_[indices[0][0]]
+        else:
+            predicted_person = "None"
 
         self.clear_window()
 
-        self.verification_label = ttk.Label(self.root, text="Verification Result", font=("Helvetica", 14,"bold"), background="white",foreground="green")
+        self.verification_label = ttk.Label(self.root, text="Verification Result", font=("Helvetica", 14, "bold"),
+                                            background="white", foreground="green")
         self.verification_label.place(relx=0.5, rely=0.1, anchor='center')
 
-        self.result_label = ttk.Label(self.root, text="", font=("Helvetica", 14,"bold"), background="white",foreground="black")
+        self.result_label = ttk.Label(self.root, text="", font=("Helvetica", 14, "bold"), background="white",
+                                    foreground="black")
         self.result_label.place(relx=0.5, rely=0.3, anchor='center')
 
-        self.image_label = tk.Label(self.root,background="white")
+        self.image_label = tk.Label(self.root, background="white")
         self.image_label.place(relx=0.5, rely=0.47, anchor='center')
 
         self.back_button = ttk.Button(self.root, text="Back", command=self.show_main_window)
         self.back_button.place(relx=0.5, rely=0.65, anchor='center', width=150, height=35)
-    
-        if predicted_person == user_name:
-            #messagebox.showinfo("Verification Result", f"Person Verified: {predicted_person}")
-            image_path = 'tick2.png'
-            audio_path = 'myoauthintro.mp3'
-            self.result_label.config(text=f"Authentication success. Identified Person: {predicted_person}")
+
+        if predicted_person != "None":
+            # Check if the predicted person matches the entered username
+            if predicted_person == user_name:
+                # Authentication success
+                image_path = 'tick2.png'
+                audio_path = 'myoauthintro.mp3'
+                self.result_label.config(text=f"Authentication success. Identified Person: {predicted_person}")
+                print(distances[0][0])
+            else:
+                # Authentication failed
+                image_path = 'wrong.png'
+                audio_path = 'wrong.mp3'
+                self.result_label.config(text="Authentication failed. Predicted person does not match the entered username.")
         else:
-            #messagebox.showinfo("Verification Result", "Authentication Failed")
+            # Authentication failed
             image_path = 'wrong.png'
             audio_path = 'wrong.mp3'
-            self.result_label.config(text="Authentication failed")
+            self.result_label.config(text="Authentication failed. No matching person found.")
 
 
         original_image = Image.open(image_path)
@@ -578,7 +595,7 @@ class EMGRecorderApp:
         # Play audio
         pygame.init()
         pygame.mixer.music.load(audio_path)  # Replace with your audio file path
-        pygame.mixer.music.play(0,0,1)
+        pygame.mixer.music.play(0, 0, 1)
 
         
 if __name__ == "__main__":
