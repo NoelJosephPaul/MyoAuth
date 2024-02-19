@@ -414,22 +414,35 @@ class EMGRecorderApp:
         # Use LabelEncoder to convert usernames to numerical labels
         label_encoder = LabelEncoder()
         df['Class'] = label_encoder.fit_transform(df['Username'])
+        
+        # Check if there are enough samples for each class
+        class_counts = df['Class'].value_counts()
+        min_samples_per_class = 5  # Adjust this value based on your data and requirements
+        
+        if min(class_counts) < min_samples_per_class:
+            messagebox.showinfo("Error", f"At least {min_samples_per_class} samples are needed for each class.")
+            return
 
         # Assuming 'Class' is the column containing numerical labels
         unique_classes = df['Class'].unique()
 
         # Create testing dataset with one feature vector per class
+        # Create testing dataset with one feature vector per class
         testing_data = []
         for class_label in unique_classes:
-            class_data = df[df['Class'] == class_label].sample(1)  # Select one random row for each class
-            testing_data.append(class_data)
+            class_data = df[df['Class'] == class_label]
+            if not class_data.empty:
+                class_data = class_data.sample(1)  # Select one random row for each class
+                testing_data.append(class_data)
 
         testing_df = pd.concat(testing_data)
         training_df = df.drop(testing_df.index)
 
+
         # Extract features and labels from training and testing datasets
         X_train = np.vstack(training_df['Features'])
         y_train = training_df['Class']
+        print(training_df['Features'])
         X_test = np.vstack(testing_df['Features'])
         y_test = testing_df['Class']
 

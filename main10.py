@@ -1,4 +1,4 @@
-#main9.py de 2nd version...brought in a threshold distance for verification beyond which the user declared as none
+#main9.py de 2nd version...here knn is replaced by CNN model tto
 
 #main8.py de 2 second version
 
@@ -26,6 +26,14 @@ import pygame  # Import pygame library
 import imageio
 from ttkthemes import ThemedStyle
 from tkinter import font
+from sklearn.preprocessing import StandardScaler
+from tensorflow.keras.models import Sequential
+from tensorflow.keras.layers import Conv1D, MaxPooling1D, Flatten, Dense
+import tensorflow as tf
+from tensorflow.keras import layers, models
+from tensorflow.keras.models import Sequential, load_model
+from tensorflow.keras.layers import Conv1D, MaxPooling1D, Flatten, Dense
+import os
 
 
 class EMGRecorderApp:
@@ -44,8 +52,11 @@ class EMGRecorderApp:
         self.user_name = None
         self.initial_option = None
 
-        self.knn_classifier = None
+        self.cnn_model = None
         self.scaler = None
+
+        # Load the CNN model
+        self.load_cnn_model()
 
         # Load and display the image
         image_path = 'myoauthicon.png'  # Replace with your image path
@@ -67,6 +78,23 @@ class EMGRecorderApp:
 
         # Schedule the transition to the main window after 5000 milliseconds (5 seconds)
         self.root.after(2500, self.show_main_window)
+
+    def load_cnn_model(self):
+        model_filename = "cnn_model.h5"
+        if os.path.exists(model_filename):
+            self.cnn_model = models.load_model(model_filename)
+            print(f"Trained CNN model loaded from {model_filename}")
+        else:
+            print("No trained CNN model found. Train the model first.")
+    
+    def load_cnn_scaler(self):
+        # Load the trained scaler for CNN
+        cnn_scaler_filename = "cnn_scaler.joblib"
+        if os.path.exists(cnn_scaler_filename):
+            self.scaler = joblib.load(cnn_scaler_filename)
+            print(f"Trained CNN scaler loaded from {cnn_scaler_filename}")
+        else:
+            print("No trained CNN scaler found.")
 
     def fade_out_audio(self, duration, step):
         current_volume = 2.0
@@ -107,7 +135,7 @@ class EMGRecorderApp:
         self.serial_port = serial_port
         self.emg_data = {}
         self.data_thread = None
-        self.load_classifier()
+
 
     def show_login_window(self):
         # Clear the window
@@ -407,83 +435,62 @@ class EMGRecorderApp:
 
         print("Loading feature vectors...")
         df = pd.read_csv(input_file)
-        df['Features'] = df['Features'].apply(lambda x: eval(x))  # Convert string to list
+        # Group by username and split the data
+        train_df, test_df = [], []
+        for username, group in df.groupby('Username'):
+            # Select 4 random samples for training
+            train_data = group.sample(n=4, random_state=42)
+            # Remaining one sample for testing
+            test_data = group.drop(train_data.index)
 
-        # Assuming 'Username' is the column containing user names
-        unique_users = df['Username'].unique()
+            train_df.append(train_data)
+            test_df.append(test_data)
 
-        # Create testing dataset with one feature vector per user
-        testing_data = []
-        for user in unique_users:
-            user_data = df[df['Username'] == user].sample(1)  # Select one random row for each user
-            testing_data.append(user_data)
+        # Combine the dataframes for training and testing
+        train_df = pd.concat(train_df)
+        test_df = pd.concat(test_df)
 
-        testing_df = pd.concat(testing_data)
-        training_df = df.drop(testing_df.index)
+        # Extract features and labels
+        X_train = np.array([eval(features) for features in train_df['Features']])
+        y_train = train_df['Username'].astype('category').cat.codes.values
 
-        # Extract features and labels from training and testing datasets
-        X_train = np.vstack(training_df['Features'])
-        y_train = training_df['Username']
-        X_test = np.vstack(testing_df['Features'])
-        y_test = testing_df['Username']
+        X_test = np.array([eval(features) for features in test_df['Features']])
+        y_test = test_df['Username'].astype('category').cat.codes.values
 
-        print(X_train)
-        print(y_train)
+        # Standardize the input features
+        scaler = StandardScaler()
+        X_train = scaler.fit_transform(X_train)
+        X_test = scaler.transform(X_test)
 
-        # Standardize the feature values
-        print("Standardizing feature values...")
-        self.scaler = StandardScaler()
-        X_train_scaled = self.scaler.fit_transform(X_train)
-        X_test_scaled = self.scaler.transform(X_test)
+        # Reshape the data for CNN input
+        X_train = X_train.reshape(X_train.shape[0], X_train.shape[1], 1)
+        X_test = X_test.reshape(X_test.shape[0], X_test.shape[1], 1)
 
-        # Create and train the KNN classifier
-        print("Training KNN classifier...")
-        self.knn_classifier = KNeighborsClassifier(n_neighbors=1, metric='manhattan')
-        self.knn_classifier.fit(X_train_scaled, y_train)
+        # Build the CNN model
+        self.cnn_model = Sequential()
+        self.cnn_model.add(Conv1D(32, kernel_size=3, activation='relu', input_shape=(X_train.shape[1], 1)))
+        self.cnn_model.add(MaxPooling1D(pool_size=2))
+        self.cnn_model.add(Flatten())
+        self.cnn_model.add(Dense(128, activation='relu'))
+        self.cnn_model.add(Dense(len(np.unique(y_train)), activation='softmax'))
 
-        # Print training accuracy
-        training_accuracy = self.knn_classifier.score(X_train_scaled, y_train)
-        print(f"Training Accuracy: {training_accuracy}")
+        # Compile the model
+        self.cnn_model.compile(loss='sparse_categorical_crossentropy', optimizer='adam', metrics=['accuracy'])
 
-        # Print testing accuracy
-        testing_accuracy = self.knn_classifier.score(X_test_scaled, y_test)
-        print(f"Testing Accuracy: {testing_accuracy}")
+        # Train the model
+        self.cnn_model.fit(X_train, y_train, epochs=100, batch_size=16, validation_data=(X_test, y_test))
 
-        messagebox.showinfo("Success", "KNN Classifier Trained Successfully!")
+        # Save the trained model
+        self.cnn_model.save("cnn_model.h5")
+        joblib.dump(scaler, "cnn_scaler.joblib")
 
-        scaler_filename = "standard_scaler.joblib"
-        joblib.dump(self.scaler, scaler_filename)
-        print(f"Trained scaler saved to {scaler_filename}")
-
-        # Save the trained classifier to a file
-        classifier_filename = "knn_classifier.joblib"
-        joblib.dump(self.knn_classifier, classifier_filename)
-        print(f"Trained classifier saved to {classifier_filename}")
-
-
-    def load_classifier(self):
-        classifier_filename = "knn_classifier.joblib"
-        if os.path.exists(classifier_filename):
-            self.knn_classifier = joblib.load(classifier_filename)
-            print(f"Trained classifier loaded from {classifier_filename}")
-            self.load_scaler()  # Load the associated scaler
-        else:
-            print("No trained classifier found. Train the classifier first.")
-
-    def load_scaler(self):
-        scaler_filename = "standard_scaler.joblib"
-        if os.path.exists(scaler_filename):
-            self.scaler = joblib.load(scaler_filename)
-            print(f"Trained scaler loaded from {scaler_filename}")
-        else:
-            print("No trained scaler found.")
-
+        print("CNN Classifier Trained Successfully!")
 
     def verify_person(self):
 
-        if not self.knn_classifier:
+        '''if not self.cnn_classifier:
             messagebox.showinfo("Error", "Please train the classifier first.")
-            return
+            return'''
 
         user_name = self.user_entry.get()
 
@@ -522,7 +529,7 @@ class EMGRecorderApp:
             start_time = time.time()
             emg_values = []
 
-            while time.time() - start_time < 2:  # Record for 2 seconds for verification
+            while time.time() - start_time < 2:  # Record for 5 seconds for verification
                 try:
                     line = ser.readline().decode().strip()
                     if line:
@@ -532,33 +539,34 @@ class EMGRecorderApp:
                 except ValueError as e:
                     print(f"Error parsing data: {e}")
 
-        self.load_classifier()  # You may need to modify this method to load the scaler
-
         # Convert EMG signals to feature vector
         features = self.calculate_features(emg_values)
+        #print(features)
 
-        # Standardize the feature values
-        features_scaled = self.scaler.transform([features])
+        # Standardize the feature values (skip this step for CNN)
+        scaler=joblib.load("cnn_scaler.joblib")
+        features_scaled = scaler.transform([features])
 
-        # Predict the person using the trained KNN classifier
-        distances, indices = self.knn_classifier.kneighbors(features_scaled, n_neighbors=1)
+        # Reshape the data for CNN input
+        #features_reshaped = np.array(features_scaled).reshape(1, len(features_scaled), 1)
 
-        # Set a threshold distance
-        threshold_distance = 5.0  # Adjust this threshold as needed
+        self.load_cnn_model()
+        self.load_cnn_scaler()
+        # Load the trained CNN model
+        model = load_model("cnn_model.h5")
 
-        if distances[0][0] < threshold_distance:
-            predicted_person = self.knn_classifier.classes_[indices[0][0]]
-        else:
-            predicted_person = "None"
+        # Predict the person using the trained CNN model
+        predictions = model.predict(features_scaled)
+        print(predictions)
+        predicted_label = np.argmax(predictions)
+        print(predicted_label)
 
         self.clear_window()
 
-        self.verification_label = ttk.Label(self.root, text="Verification Result", font=("Helvetica", 14, "bold"),
-                                            background="white", foreground="green")
+        self.verification_label = ttk.Label(self.root, text="Verification Result", font=("Helvetica", 14, "bold"), background="white", foreground="green")
         self.verification_label.place(relx=0.5, rely=0.1, anchor='center')
 
-        self.result_label = ttk.Label(self.root, text="", font=("Helvetica", 14, "bold"), background="white",
-                                    foreground="black")
+        self.result_label = ttk.Label(self.root, text="", font=("Helvetica", 14, "bold"), background="white", foreground="black")
         self.result_label.place(relx=0.5, rely=0.3, anchor='center')
 
         self.image_label = tk.Label(self.root, background="white")
@@ -567,25 +575,16 @@ class EMGRecorderApp:
         self.back_button = ttk.Button(self.root, text="Back", command=self.show_main_window)
         self.back_button.place(relx=0.5, rely=0.65, anchor='center', width=150, height=35)
 
-        if predicted_person != "None":
-            # Check if the predicted person matches the entered username
-            if predicted_person == user_name:
-                # Authentication success
-                image_path = 'tick2.png'
-                audio_path = 'myoauthintro.mp3'
-                self.result_label.config(text=f"Authentication success. Identified Person: {predicted_person}")
-                print(distances[0][0])
-            else:
-                # Authentication failed
-                image_path = 'wrong.png'
-                audio_path = 'wrong.mp3'
-                self.result_label.config(text="Authentication failed. Predicted person does not match the entered username.")
+        if predicted_label == user_name:  # Modify this condition based on your label encoding
+            # messagebox.showinfo("Verification Result", f"Person Verified: {predicted_person}")
+            image_path = 'tick2.png'
+            audio_path = 'myoauthintro.mp3'
+            self.result_label.config(text=f"Authentication success. Identified Person: {predicted_label}")
         else:
-            # Authentication failed
+            # messagebox.showinfo("Verification Result", "Authentication Failed")
             image_path = 'wrong.png'
             audio_path = 'wrong.mp3'
-            self.result_label.config(text="Authentication failed. No matching person found.")
-
+            self.result_label.config(text="Authentication failed")
 
         original_image = Image.open(image_path)
         resized_image = original_image.resize((100, 100), Image.LANCZOS)

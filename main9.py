@@ -24,6 +24,8 @@ import pygame  # Import pygame library
 import imageio
 from ttkthemes import ThemedStyle
 from tkinter import font
+from scipy.signal import spectrogram
+from scipy import signal
 
 
 class EMGRecorderApp:
@@ -366,7 +368,7 @@ class EMGRecorderApp:
         print(f"\nFeature vectors saved to {output_file}")
 
     def calculate_features(self, emg_values):
-        # feature extraction
+        # feature extraction time domain
         features = []
         features.append(np.mean(np.abs(emg_values),axis=0)) #mean absolute value
         features.append(np.sum(np.abs(np.diff(emg_values)),axis=0)) #waveform length
@@ -376,19 +378,31 @@ class EMGRecorderApp:
         features.append(np.sqrt(np.mean(np.array(emg_values)**2,axis=0))) #root mean sqaure
         features.append(np.sum(np.array(emg_values)**2,axis=0)) #simple square integral
 
+        #frequency domain
         # Add Fourier transform as a new feature
         fourier_transform = np.abs(np.fft.fft(emg_values))
         features.append(np.mean(fourier_transform, axis=0))
-
-        # Additional frequency domain features
-        features.append(np.sum(fourier_transform, axis=0))  # Total energy
-        features.append(np.sum(fourier_transform ** 2, axis=0))  # Power
-        features.append(np.argmax(fourier_transform, axis=0))  # Dominant frequency index
 
         # Frequency centroid
         frequency_bins = len(fourier_transform)
         frequency_values = np.fft.fftfreq(frequency_bins, d=1.0)  # Frequency values corresponding to bins
         features.append(np.sum(frequency_values * fourier_transform, axis=0) / np.sum(fourier_transform, axis=0))
+
+        # Additional frequency domain features
+        features.append(np.sum(fourier_transform, axis=0))  # Total energy
+        features.append(np.sum(fourier_transform ** 2, axis=0))  # Power
+        features.append(np.argmax(fourier_transform, axis=0))  # Dominant frequency index
+        features.append(np.mean(frequency_values * fourier_transform, axis=0))  # Mean frequency
+        features.append(np.median(frequency_values * fourier_transform, axis=0))  # Median frequency
+        features.append(np.std(frequency_values * fourier_transform, axis=0))  # Standard deviation of frequency
+        features.append(np.var(frequency_values * fourier_transform, axis=0))  # Variance of frequency
+
+        # Power spectral density (PSD) features
+        psd = np.abs(np.fft.fft(emg_values))**2 / len(emg_values)
+        features.append(np.sum(psd, axis=0))  # Total power
+        features.append(np.mean(psd, axis=0))  # Mean power
+        features.append(np.sum(psd[1:], axis=0))  # Exclude DC component for total power
+        features.append(np.mean(psd[1:], axis=0))  # Exclude DC component for mean power
 
         # Spectral entropy
         spectral_entropy = -np.sum(fourier_transform * np.log2(fourier_transform + 1e-10), axis=0)
