@@ -370,6 +370,12 @@ class EMGRecorderApp:
     def calculate_features(self, emg_values):
         # feature extraction time domain
         features = []
+        
+        features.append(np.mean(emg_values) / np.std(emg_values)) #snr
+        features.append(np.mean(np.abs(emg_values))) #baseline noise
+        features.append(np.max(emg_values) - np.min(emg_values)) #line interface
+
+
         features.append(np.mean(np.abs(emg_values),axis=0)) #mean absolute value
         features.append(np.sum(np.abs(np.diff(emg_values)),axis=0)) #waveform length
         features.append(np.sum(np.diff(np.sign(emg_values),axis=0)!=0,axis=0)/(len(emg_values)-1))
@@ -404,10 +410,12 @@ class EMGRecorderApp:
         features.append(np.sum(psd[1:], axis=0))  # Exclude DC component for total power
         features.append(np.mean(psd[1:], axis=0))  # Exclude DC component for mean power
 
+
+
         # Spectral entropy
         spectral_entropy = -np.sum(fourier_transform * np.log2(fourier_transform + 1e-10), axis=0)
         features.append(spectral_entropy)
-
+    
         return features
     
     def train_classifier(self):

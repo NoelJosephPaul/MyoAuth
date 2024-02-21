@@ -1,10 +1,10 @@
-#main9.py de 3rd version.. applied KFD to increase the distance between the feature vectors...
+#main9.py de improvement...here signal noise filtering is applied
 
 #main8.py de 2 second version
 
 #main5 cont and separate login and register
 
-#introducing a new title window and audio 
+#introducing a new title window and audio
 
 import tkinter as tk
 from tkinter import ttk, filedialog, messagebox
@@ -26,8 +26,11 @@ import pygame  # Import pygame library
 import imageio
 from ttkthemes import ThemedStyle
 from tkinter import font
-from sklearn.discriminant_analysis import LinearDiscriminantAnalysis
-from sklearn.preprocessing import LabelEncoder
+from scipy.signal import spectrogram
+from scipy import signal
+from scipy.signal import butter, filtfilt
+from scipy.signal import butter, lfilter, iirnotch
+import scipy.signal as sp
 
 
 class EMGRecorderApp:
@@ -302,24 +305,73 @@ class EMGRecorderApp:
             self.next_button.place(relx=0.5, rely=0.6, anchor='center')
 
 
+    
     def record_emg(self, user_name):
         print(user_name)
         with serial.Serial(self.serial_port, 115200, timeout=1) as ser:
             ser.reset_input_buffer()
 
             start_time = time.time()
+            filtered_emg_values = []
+            sampling_rate = 1000
+
+            # Define notch filter parameters
+            notch_freq = 60.0  # Notch filter frequency
+            Q = 30.0  # Quality factor
+
+            # Design notch filter coefficients
+            b_notch, a_notch = sp.iirnotch(notch_freq / (sampling_rate / 2), Q)
+
+            # Define bandpass filter parameters
+            high = 20 / (sampling_rate / 2)
+            low = 450 / (sampling_rate / 2)
+
+            # Design bandpass filter coefficients
+            b_bandpass, a_bandpass = sp.butter(4, [high, low], btype='band')
+
             while time.time() - start_time < 2:
                 try:
                     line = ser.readline().decode().strip()
                     if line:
                         timestamp = datetime.now().strftime("%H:%M:%S.%f")[:-3]
                         emg_value = float(line)
-                        self.emg_data[user_name].append((timestamp, emg_value))
+
+                        # Apply notch filter
+                        emg_value_notch = sp.lfilter(b_notch, a_notch, [emg_value])[0]
+
+                        # Check if the input vector is long enough for filtering
+                        if len(filtered_emg_values) >= max(len(b_bandpass), len(a_bandpass)):
+                            # Apply bandpass filter
+                            emg_value_filtered = sp.filtfilt(b_bandpass, a_bandpass, [emg_value_notch])[0]
+
+                            filtered_emg_values.append((timestamp, emg_value_filtered))
+                        else:
+                            print("Not enough data for filtering. Skipping.")
+
                 except ValueError as e:
                     print(f"Error parsing data: {e}")
 
-        # Save data to CSV after recording
-        self.save_to_csv()
+        # Save filtered data to CSV after recording
+        self.save_filtered_to_csv(filtered_emg_values, user_name)
+
+
+    def save_filtered_to_csv(self, filtered_emg_values, user_name):
+            filename = "all_users_filtered_emg_data.csv"
+
+            # Check if the file already exists
+            file_exists = os.path.isfile(filename)
+
+            with open(filename, 'a', newline='') as csvfile:
+                csv_writer = csv.writer(csvfile)
+
+                # Write header only if the file doesn't exist
+                if not file_exists:
+                    csv_writer.writerow(["Username", "timestamps", "emgvalues"])
+
+                for timestamp, emg_value in filtered_emg_values:
+                    csv_writer.writerow([user_name, timestamp, emg_value])
+
+            print(f"Filtered EMG data saved to {filename}")
 
     def save_to_csv(self):
         filename = "all_users_emg_data.csv"
@@ -370,8 +422,14 @@ class EMGRecorderApp:
         print(f"\nFeature vectors saved to {output_file}")
 
     def calculate_features(self, emg_values):
-        # feature extraction
+        # feature extraction time domain
         features = []
+        
+        features.append(np.mean(emg_values) / np.std(emg_values)) #snr
+        features.append(np.mean(np.abs(emg_values))) #baseline noise
+        features.append(np.max(emg_values) - np.min(emg_values)) #line interface
+
+
         features.append(np.mean(np.abs(emg_values),axis=0)) #mean absolute value
         features.append(np.sum(np.abs(np.diff(emg_values)),axis=0)) #waveform length
         features.append(np.sum(np.diff(np.sign(emg_values),axis=0)!=0,axis=0)/(len(emg_values)-1))
@@ -380,24 +438,36 @@ class EMGRecorderApp:
         features.append(np.sqrt(np.mean(np.array(emg_values)**2,axis=0))) #root mean sqaure
         features.append(np.sum(np.array(emg_values)**2,axis=0)) #simple square integral
 
+        #frequency domain
         # Add Fourier transform as a new feature
         fourier_transform = np.abs(np.fft.fft(emg_values))
         features.append(np.mean(fourier_transform, axis=0))
-
-        # Additional frequency domain features
-        features.append(np.sum(fourier_transform, axis=0))  # Total energy
-        features.append(np.sum(fourier_transform ** 2, axis=0))  # Power
-        features.append(np.argmax(fourier_transform, axis=0))  # Dominant frequency index
 
         # Frequency centroid
         frequency_bins = len(fourier_transform)
         frequency_values = np.fft.fftfreq(frequency_bins, d=1.0)  # Frequency values corresponding to bins
         features.append(np.sum(frequency_values * fourier_transform, axis=0) / np.sum(fourier_transform, axis=0))
 
+        # Additional frequency domain features
+        features.append(np.sum(fourier_transform, axis=0))  # Total energy
+        features.append(np.sum(fourier_transform ** 2, axis=0))  # Power
+        features.append(np.argmax(fourier_transform, axis=0))  # Dominant frequency index
+        features.append(np.mean(frequency_values * fourier_transform, axis=0))  # Mean frequency
+        features.append(np.median(frequency_values * fourier_transform, axis=0))  # Median frequency
+        features.append(np.std(frequency_values * fourier_transform, axis=0))  # Standard deviation of frequency
+        features.append(np.var(frequency_values * fourier_transform, axis=0))  # Variance of frequency
+
+        # Power spectral density (PSD) features
+        psd = np.abs(np.fft.fft(emg_values))**2 / len(emg_values)
+        features.append(np.sum(psd, axis=0))  # Total power
+        features.append(np.mean(psd, axis=0))  # Mean power
+        features.append(np.sum(psd[1:], axis=0))  # Exclude DC component for total power
+        features.append(np.mean(psd[1:], axis=0))  # Exclude DC component for mean power
+
         # Spectral entropy
         spectral_entropy = -np.sum(fourier_transform * np.log2(fourier_transform + 1e-10), axis=0)
         features.append(spectral_entropy)
-
+    
         return features
     
     def train_classifier(self):
@@ -411,40 +481,23 @@ class EMGRecorderApp:
         df = pd.read_csv(input_file)
         df['Features'] = df['Features'].apply(lambda x: eval(x))  # Convert string to list
 
-        # Use LabelEncoder to convert usernames to numerical labels
-        label_encoder = LabelEncoder()
-        df['Class'] = label_encoder.fit_transform(df['Username'])
-        
-        # Check if there are enough samples for each class
-        class_counts = df['Class'].value_counts()
-        min_samples_per_class = 5  # Adjust this value based on your data and requirements
-        
-        if min(class_counts) < min_samples_per_class:
-            messagebox.showinfo("Error", f"At least {min_samples_per_class} samples are needed for each class.")
-            return
+        # Assuming 'Username' is the column containing user names
+        unique_users = df['Username'].unique()
 
-        # Assuming 'Class' is the column containing numerical labels
-        unique_classes = df['Class'].unique()
-
-        # Create testing dataset with one feature vector per class
-        # Create testing dataset with one feature vector per class
+        # Create testing dataset with one feature vector per user
         testing_data = []
-        for class_label in unique_classes:
-            class_data = df[df['Class'] == class_label]
-            if not class_data.empty:
-                class_data = class_data.sample(1)  # Select one random row for each class
-                testing_data.append(class_data)
+        for user in unique_users:
+            user_data = df[df['Username'] == user].sample(1)  # Select one random row for each user
+            testing_data.append(user_data)
 
         testing_df = pd.concat(testing_data)
         training_df = df.drop(testing_df.index)
 
-
         # Extract features and labels from training and testing datasets
         X_train = np.vstack(training_df['Features'])
-        y_train = training_df['Class']
-        print(training_df['Features'])
+        y_train = training_df['Username']
         X_test = np.vstack(testing_df['Features'])
-        y_test = testing_df['Class']
+        y_test = testing_df['Username']
 
         print(X_train)
         print(y_train)
@@ -455,21 +508,17 @@ class EMGRecorderApp:
         X_train_scaled = self.scaler.fit_transform(X_train)
         X_test_scaled = self.scaler.transform(X_test)
 
-        # Apply KFD transformation to training and testing data
-        X_train_transformed = self.kfd_transform(X_train_scaled, y_train)
-        X_test_transformed = self.kfd_transform(X_test_scaled, y_test)
-
         # Create and train the KNN classifier
         print("Training KNN classifier...")
         self.knn_classifier = KNeighborsClassifier(n_neighbors=1, metric='manhattan')
-        self.knn_classifier.fit(X_train_transformed, y_train)
+        self.knn_classifier.fit(X_train_scaled, y_train)
 
         # Print training accuracy
-        training_accuracy = self.knn_classifier.score(X_train_transformed, y_train)
+        training_accuracy = self.knn_classifier.score(X_train_scaled, y_train)
         print(f"Training Accuracy: {training_accuracy}")
 
         # Print testing accuracy
-        testing_accuracy = self.knn_classifier.score(X_test_transformed, y_test)
+        testing_accuracy = self.knn_classifier.score(X_test_scaled, y_test)
         print(f"Testing Accuracy: {testing_accuracy}")
 
         messagebox.showinfo("Success", "KNN Classifier Trained Successfully!")
@@ -482,11 +531,6 @@ class EMGRecorderApp:
         classifier_filename = "knn_classifier.joblib"
         joblib.dump(self.knn_classifier, classifier_filename)
         print(f"Trained classifier saved to {classifier_filename}")
-
-    def kfd_transform(self, X, y):
-        lda = LinearDiscriminantAnalysis(n_components=2)
-        X_transformed = lda.fit_transform(X, y)
-        return X_transformed
 
 
     def load_classifier(self):
@@ -508,6 +552,7 @@ class EMGRecorderApp:
 
 
     def verify_person(self):
+
         if not self.knn_classifier:
             messagebox.showinfo("Error", "Please train the classifier first.")
             return
@@ -517,7 +562,7 @@ class EMGRecorderApp:
         if not user_name:
             tk.messagebox.showinfo("Error", "Please enter Username.")
             return
-
+        
         self.clear_window()
 
         self.data_thread = threading.Thread(target=self.record_emg_for_verification, args=(user_name,))
@@ -526,7 +571,7 @@ class EMGRecorderApp:
         countup_label = tk.Label(self.root, text="", font=("Helvetica", 12), background="white")
         countup_label.place(relx=0.5, rely=0.2, anchor='center')
 
-        self.verify_countup = threading.Thread(target=self.verify_countdown, args=(2, countup_label))
+        self.verify_countup = threading.Thread(target=self.verify_countdown, args=(2,countup_label))
         self.verify_countup.start()
 
     def verify_countdown(self, seconds, countup_label):
@@ -549,7 +594,7 @@ class EMGRecorderApp:
             start_time = time.time()
             emg_values = []
 
-            while time.time() - start_time < 2:  # Record for 2 seconds for verification
+            while time.time() - start_time < 2:  # Record for 5 seconds for verification
                 try:
                     line = ser.readline().decode().strip()
                     if line:
@@ -563,42 +608,41 @@ class EMGRecorderApp:
 
         # Convert EMG signals to feature vector
         features = self.calculate_features(emg_values)
-
-        # Apply KFD transformation
-        features_transformed = self.kfd_transform(features)
+        #print(features)
 
         # Standardize the feature values
-        features_scaled = self.scaler.transform([features_transformed])
+        features_scaled = self.scaler.transform([features])
+        #print(features_scaled)
 
-        # Predict the person using the trained KNN classifier
+        #Predict the person using the trained KNN classifier
         predicted_person = self.knn_classifier.predict(features_scaled)
         print(predicted_person)
 
         self.clear_window()
 
-        self.verification_label = ttk.Label(self.root, text="Verification Result", font=("Helvetica", 14, "bold"),
-                                            background="white", foreground="green")
+        self.verification_label = ttk.Label(self.root, text="Verification Result", font=("Helvetica", 14,"bold"), background="white",foreground="green")
         self.verification_label.place(relx=0.5, rely=0.1, anchor='center')
 
-        self.result_label = ttk.Label(self.root, text="", font=("Helvetica", 14, "bold"), background="white",
-                                    foreground="black")
+        self.result_label = ttk.Label(self.root, text="", font=("Helvetica", 14,"bold"), background="white",foreground="black")
         self.result_label.place(relx=0.5, rely=0.3, anchor='center')
 
-        self.image_label = tk.Label(self.root, background="white")
+        self.image_label = tk.Label(self.root,background="white")
         self.image_label.place(relx=0.5, rely=0.47, anchor='center')
 
         self.back_button = ttk.Button(self.root, text="Back", command=self.show_main_window)
         self.back_button.place(relx=0.5, rely=0.65, anchor='center', width=150, height=35)
-
+    
         if predicted_person == user_name:
+            #messagebox.showinfo("Verification Result", f"Person Verified: {predicted_person}")
             image_path = 'tick2.png'
             audio_path = 'myoauthintro.mp3'
-            self.result_label.config(
-                text=f"Authentication success. Identified Person: {predicted_person}")
+            self.result_label.config(text=f"Authentication success. Identified Person: {predicted_person}")
         else:
+            #messagebox.showinfo("Verification Result", "Authentication Failed")
             image_path = 'wrong.png'
             audio_path = 'wrong.mp3'
             self.result_label.config(text="Authentication failed")
+
 
         original_image = Image.open(image_path)
         resized_image = original_image.resize((100, 100), Image.LANCZOS)
@@ -608,7 +652,7 @@ class EMGRecorderApp:
         # Play audio
         pygame.init()
         pygame.mixer.music.load(audio_path)  # Replace with your audio file path
-        pygame.mixer.music.play(0, 0, 1)
+        pygame.mixer.music.play(0,0,1)
 
         
 if __name__ == "__main__":
