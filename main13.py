@@ -1,3 +1,7 @@
+#main11.py de vere version
+#-here confidence of the entered username is checked
+#removed cwt
+
 #-main9.py another version here high pass filter 5Hz is applied
 #-high pass filter 5hz to eliminate direct current offset and persiperation
 #-notch filter 60hz to filter out power line noise
@@ -445,33 +449,10 @@ class EMGRecorderApp:
 
         print(f"\nFeature vectors saved to {output_file}")
 
-    def calculate_cwt_features(self, emg_values):
-        scales = np.arange(1, 128)  # Adjust the range of scales as needed
-        #cwt_matrix = cwt(emg_values, morlet, scales)
-        #cwt_matrix, frequencies = pywt.cwt(emg_values, scales, 'cmor')
-        
-        cmor_wavelet = 'cmor1.5-1.0'  # Example parameters, adjust as needed
-        cwt_matrix, frequencies = pywt.cwt(emg_values, scales, cmor_wavelet)
-
-        # Calculate statistical features from the CWT matrix
-        cwt_mean = np.mean(np.abs(cwt_matrix), axis=1)
-        cwt_std = np.std(np.abs(cwt_matrix), axis=1)
-        cwt_max = np.max(np.abs(cwt_matrix), axis=1)
-        cwt_min = np.min(np.abs(cwt_matrix), axis=1)
-        
-        # Concatenate all the CWT features into a single list
-        cwt_features = np.concatenate([cwt_mean, cwt_std, cwt_max, cwt_min])
-        
-        return cwt_features
-
     def calculate_features(self, emg_values):
         # feature extraction time domain
         features = []
         
-        #features.append(np.mean(emg_values) / np.std(emg_values))  # SNR
-        #features.append(np.mean(np.abs(emg_values)))  # Baseline noise
-        #features.append(np.max(emg_values) - np.min(emg_values))  # Line interface
-
         features.append(np.mean(np.abs(emg_values), axis=0))  # Mean absolute value
         features.append(np.sum(np.abs(np.diff(emg_values)), axis=0))  # Waveform length
         features.append(np.sum(np.diff(np.sign(emg_values), axis=0) != 0, axis=0) / (len(emg_values) - 1))
@@ -518,21 +499,6 @@ class EMGRecorderApp:
         features.append(np.mean(np.sqrt(np.abs(emg_values)), axis=0))  # Mean square root
         features.append(np.mean(np.log(np.abs(emg_values) + 1e-10), axis=0))  # Log detector
 
-        '''# Time-frequency domain features
-        emg_values_array = np.array(emg_values)
-        emg_values_array = emg_values_array.reshape(-1, 1)
-        _, _, Sxx = spectrogram(emg_values_array, fs=115200, nperseg=2)
-        
-        # Spectrogram features
-        features.append(np.mean(Sxx, axis=0))  # Mean of the spectrogram
-        features.append(np.max(Sxx, axis=0))   # Maximum of the spectrogram
-        features.append(np.min(Sxx, axis=0))   # Minimum of the spectrogram
-        features.append(np.std(Sxx, axis=0))   # Standard deviation of the spectrogram
-        
-        # Additional time-frequency features
-        features.append(np.sum(Sxx, axis=0))  # Total energy in the spectrogram
-        features.append(np.sum(Sxx ** 2, axis=0))  # Power in the spectrogram'''
-
         # Time-frequency domain features
         f, t, Zxx = stft(emg_values, fs=115200, nperseg=64)  # You can adjust nperseg based on your requirements
 
@@ -567,12 +533,6 @@ class EMGRecorderApp:
         # Variance of frequency in each time segment
         var_freq_per_time = np.var(f * np.abs(Zxx), axis=0)
         features.extend(var_freq_per_time)
-
-        # Calculate CWT features
-        cwt_features = self.calculate_cwt_features(emg_values)
-
-        # Concatenate CWT features with existing features
-        features.extend(cwt_features)
     
         return features
     
@@ -592,21 +552,8 @@ class EMGRecorderApp:
 
         print("Loading feature vectors...")
         df = pd.read_csv(input_file)
-        # Apply preprocessing to the 'Features' column
-
-        # Print the 'Features' column before applying ast.literal_eval
-        #print("Features column before conversion:")
-        #print(df['Features'])
 
         df['Features'] = df['Features'].apply(self.preprocess_features_string)
-
-        #problematic_values = df[df['Features'].apply(lambda x: not isinstance(x, str))]
-        #print("Problematic values:", problematic_values)
-
-
-        # Now, you should be able to use ast.literal_eval without issues
-        #df['Features'] = df['Features'].apply(lambda x:ast.literal_eval(x))
-
         df['Features'] = df['Features'].apply(lambda x: eval(x))  # Convert string to list
 
         # Assuming 'Username' is the column containing user names
@@ -721,7 +668,7 @@ class EMGRecorderApp:
             start_time = time.time()
             emg_values = []
 
-            while time.time() - start_time < 2:  # Record for 5 seconds for verification
+            while time.time() - start_time < 2:  # Record for 2 seconds for verification
                 try:
                     line = ser.readline().decode().strip()
                     if line:
@@ -746,34 +693,43 @@ class EMGRecorderApp:
         features_scaled = self.scaler.transform([features])
 
         # Predict the person using the trained KNN classifier
-        predicted_person = self.knn_classifier.predict(features_scaled)
-        print(predicted_person)
+        confidence_scores = self.knn_classifier.predict_proba(features_scaled)
+        print(confidence_scores)
+
+        # Get the index of the class for the entered username
+        user_class_index = self.knn_classifier.classes_.tolist().index(user_name)
+        
+        # Get the confidence for the entered username's class
+        confidence = confidence_scores[0, user_class_index]
+
+        print(f"Confidence for {user_name}: {confidence}")
 
         self.clear_window()
 
-        self.verification_label = ttk.Label(self.root, text="Verification Result", font=("Helvetica", 14,"bold"), background="white",foreground="green")
+        self.verification_label = ttk.Label(self.root, text="Verification Result", font=("Helvetica", 14, "bold"),
+                                            background="white", foreground="green")
         self.verification_label.place(relx=0.5, rely=0.1, anchor='center')
 
-        self.result_label = ttk.Label(self.root, text="", font=("Helvetica", 14,"bold"), background="white",foreground="black")
+        self.result_label = ttk.Label(self.root, text="", font=("Helvetica", 14, "bold"),
+                                    background="white", foreground="black")
         self.result_label.place(relx=0.5, rely=0.3, anchor='center')
 
-        self.image_label = tk.Label(self.root,background="white")
+        self.image_label = tk.Label(self.root, background="white")
         self.image_label.place(relx=0.5, rely=0.47, anchor='center')
 
         self.back_button = ttk.Button(self.root, text="Back", command=self.show_main_window)
         self.back_button.place(relx=0.5, rely=0.65, anchor='center', width=150, height=35)
-    
-        if predicted_person == user_name:
-            #messagebox.showinfo("Verification Result", f"Person Verified: {predicted_person}")
+
+        if confidence > 0.8:  # Set your confidence threshold here
+            # Authentication success
             image_path = 'tick2.png'
             audio_path = 'myoauthintro.mp3'
-            self.result_label.config(text=f"Authentication success. Identified Person: {predicted_person}")
+            self.result_label.config(text=f"Authentication success. Identified Person: {user_name}")
         else:
-            #messagebox.showinfo("Verification Result", "Authentication Failed")
+            # Authentication failed
             image_path = 'wrong.png'
             audio_path = 'wrong.mp3'
             self.result_label.config(text="Authentication failed")
-
 
         original_image = Image.open(image_path)
         resized_image = original_image.resize((100, 100), Image.LANCZOS)
@@ -783,7 +739,7 @@ class EMGRecorderApp:
         # Play audio
         pygame.init()
         pygame.mixer.music.load(audio_path)  # Replace with your audio file path
-        pygame.mixer.music.play(0,0,1)
+        pygame.mixer.music.play(0, 0, 1)
 
         
 if __name__ == "__main__":
