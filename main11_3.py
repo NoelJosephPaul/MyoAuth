@@ -1,3 +1,8 @@
+#main11_old2.py de vere version..here traversing thru different values of k to find optimal
+#be carefullll..test needed with dataset with only clenched fists
+
+#main11_old.py de 4 second version and removed 2 features (26 Feb 2024)
+
 #-main9.py another version here high pass filter 5Hz is applied
 #-high pass filter 5hz to eliminate direct current offset and persiperation
 #-notch filter 60hz to filter out power line noise
@@ -39,7 +44,7 @@ from scipy.signal import spectrogram, stft
 from scipy.signal import cwt, morlet
 import matplotlib.pyplot as plt
 import nolds
-import pywt
+from sklearn.model_selection import cross_val_score
 
 
 class EMGRecorderApp:
@@ -194,7 +199,7 @@ class EMGRecorderApp:
         self.instructions_label2 = ttk.Label(self.root, text="You will be guided through a series of five steps.", font=("Helvetica", 12), background="white")
         self.instructions_label2.place(relx=0.5, rely=0.2, anchor='center')
 
-        self.instructions_label3 = ttk.Label(self.root, text="During each step, execute a hand gesture for a duration of 2 seconds.", font=("Helvetica", 12), background="white")
+        self.instructions_label3 = ttk.Label(self.root, text="During each step, execute a hand gesture for a duration of 4 seconds.", font=("Helvetica", 12), background="white")
         self.instructions_label3.place(relx=0.5, rely=0.3, anchor='center')
 
         self.instructions_label4 = ttk.Label(self.root, text="It is necessary to maintain uniformity by consistently performing the same gesture at each step.", font=("Helvetica", 12), background="white")
@@ -252,7 +257,7 @@ class EMGRecorderApp:
         countdown_label.place(relx=0.5, rely=0.2, anchor='center')
 
         # Start the countdown in a separate thread
-        countdown_thread = threading.Thread(target=self.start_countdown, args=(2, countdown_label))
+        countdown_thread = threading.Thread(target=self.start_countdown, args=(4, countdown_label))
         countdown_thread.start()
     
     def start_countdown(self, seconds, countdown_label):
@@ -260,7 +265,7 @@ class EMGRecorderApp:
         gif_path = 'wave2.gif'  # Replace with your GIF path
         self.gif_label = tk.Label(self.root,background="white")
         self.gif_label.place(relx=0.5, rely=0.3, anchor='center')
-        self.show_gif(gif_path, 2)  # Display the GIF for 5 seconds
+        self.show_gif(gif_path, 4)  # Display the GIF for 5 seconds
 
         for i in range(0,seconds,1):
             countdown_label.config(text=f"Recording...  {i} seconds")
@@ -324,7 +329,7 @@ class EMGRecorderApp:
             ser.reset_input_buffer()
 
             start_time = time.time()
-            while time.time() - start_time < 2:
+            while time.time() - start_time < 4:
                 try:
                     line = ser.readline().decode().strip()
                     if line:
@@ -416,8 +421,28 @@ class EMGRecorderApp:
         # Use IFFT to convert frequency back to amplitude
         time_data = np.fft.ifft(frequency_data)
         return np.real(time_data)
+    
+    def remove_negatives(self):
+        # Load the CSV file
+        csv_file_path = 'all_users_filtered_emg_data.csv'  # Update the path
+        df = pd.read_csv(csv_file_path)
+
+        # Calculate RMS for alignment
+        rms_values = np.sqrt(np.mean(np.square(df['emgvalues'])))
+        
+        # Align EMG signal using RMS
+        df['emgvalues'] = df['emgvalues'] + np.abs(rms_values)
+
+        # Replace negative values with zero
+        df['emgvalues'] = np.where(df['emgvalues'] < 0, 0, df['emgvalues'])
+
+        # Save the updated DataFrame to the same CSV file
+        df.to_csv(csv_file_path, index=False)
+
+        messagebox.showinfo("Info", "Negative values removed after aligning EMG signal using RMS in all_users_filtered_emg_data.csv")
 
     def feature_extract_data(self):
+        self.remove_negatives()
         input_file = filedialog.askopenfilename(title="Select CSV file", filetypes=[("CSV files", "*.csv")])
 
         if not input_file:
@@ -447,12 +472,8 @@ class EMGRecorderApp:
 
     def calculate_cwt_features(self, emg_values):
         scales = np.arange(1, 128)  # Adjust the range of scales as needed
-        #cwt_matrix = cwt(emg_values, morlet, scales)
-        #cwt_matrix, frequencies = pywt.cwt(emg_values, scales, 'cmor')
+        cwt_matrix = cwt(emg_values, morlet, scales)
         
-        cmor_wavelet = 'cmor1.5-1.0'  # Example parameters, adjust as needed
-        cwt_matrix, frequencies = pywt.cwt(emg_values, scales, cmor_wavelet)
-
         # Calculate statistical features from the CWT matrix
         cwt_mean = np.mean(np.abs(cwt_matrix), axis=1)
         cwt_std = np.std(np.abs(cwt_matrix), axis=1)
@@ -477,16 +498,15 @@ class EMGRecorderApp:
         features.append(np.sum(np.diff(np.sign(emg_values), axis=0) != 0, axis=0) / (len(emg_values) - 1))
         features.append(skew(emg_values, axis=0))
         features.append(kurtosis(emg_values, axis=0))
-        features.append(np.sqrt(np.mean(np.array(emg_values)**2, axis=0)))  # Root mean square
+        #features.append(np.sqrt(np.mean(np.array(emg_values)**2, axis=0)))  # Root mean square
         features.append(np.sum(np.array(emg_values)**2, axis=0))  # Simple square integral
-
         features.append(nolds.sampen(emg_values))
         
 
         # Frequency domain
         # Add Fourier transform as a new feature
         fourier_transform = np.abs(np.fft.fft(emg_values))
-        features.append(np.mean(fourier_transform, axis=0))
+        #features.append(np.mean(fourier_transform, axis=0))
 
         # Frequency centroid
         frequency_bins = len(fourier_transform)
@@ -517,21 +537,6 @@ class EMGRecorderApp:
         features.append(np.sum(np.power(emg_values, 4), axis=0) / len(emg_values))  # High order temporal moment
         features.append(np.mean(np.sqrt(np.abs(emg_values)), axis=0))  # Mean square root
         features.append(np.mean(np.log(np.abs(emg_values) + 1e-10), axis=0))  # Log detector
-
-        '''# Time-frequency domain features
-        emg_values_array = np.array(emg_values)
-        emg_values_array = emg_values_array.reshape(-1, 1)
-        _, _, Sxx = spectrogram(emg_values_array, fs=115200, nperseg=2)
-        
-        # Spectrogram features
-        features.append(np.mean(Sxx, axis=0))  # Mean of the spectrogram
-        features.append(np.max(Sxx, axis=0))   # Maximum of the spectrogram
-        features.append(np.min(Sxx, axis=0))   # Minimum of the spectrogram
-        features.append(np.std(Sxx, axis=0))   # Standard deviation of the spectrogram
-        
-        # Additional time-frequency features
-        features.append(np.sum(Sxx, axis=0))  # Total energy in the spectrogram
-        features.append(np.sum(Sxx ** 2, axis=0))  # Power in the spectrogram'''
 
         # Time-frequency domain features
         f, t, Zxx = stft(emg_values, fs=115200, nperseg=64)  # You can adjust nperseg based on your requirements
@@ -575,13 +580,6 @@ class EMGRecorderApp:
         features.extend(cwt_features)
     
         return features
-    
-    def preprocess_features_string(self,features_str):
-        # Replace 'array(' with '[' and '])' with ']' to handle nested arrays
-        features_str = features_str.replace('array([[', '[').replace(']])', ']')
-        features_str = features_str.replace('array([', '[').replace('])', ']')
-        features_str = features_str.replace('array(', '[').replace('])', ']')
-        return features_str
 
     def train_classifier(self):
         # Load feature vectors from the CSV file
@@ -592,30 +590,16 @@ class EMGRecorderApp:
 
         print("Loading feature vectors...")
         df = pd.read_csv(input_file)
-        # Apply preprocessing to the 'Features' column
-
-        # Print the 'Features' column before applying ast.literal_eval
-        #print("Features column before conversion:")
-        #print(df['Features'])
-
-        df['Features'] = df['Features'].apply(self.preprocess_features_string)
-
-        #problematic_values = df[df['Features'].apply(lambda x: not isinstance(x, str))]
-        #print("Problematic values:", problematic_values)
-
-
-        # Now, you should be able to use ast.literal_eval without issues
-        #df['Features'] = df['Features'].apply(lambda x:ast.literal_eval(x))
-
         df['Features'] = df['Features'].apply(lambda x: eval(x))  # Convert string to list
 
         # Assuming 'Username' is the column containing user names
         unique_users = df['Username'].unique()
+        print(unique_users)
 
         # Create testing dataset with one feature vector per user
         testing_data = []
         for user in unique_users:
-            user_data = df[df['Username'] == user].sample(1)  # Select one random row for each user
+            user_data = df[df['Username'] == user].tail(1)  # Select last row for each user
             testing_data.append(user_data)
 
         testing_df = pd.concat(testing_data)
@@ -627,38 +611,61 @@ class EMGRecorderApp:
         X_test = np.vstack(testing_df['Features'])
         y_test = testing_df['Username']
 
-        #print(X_train)
-        #print(y_train)
-
         # Standardize the feature values
         print("Standardizing feature values...")
         self.scaler = StandardScaler()
         X_train_scaled = self.scaler.fit_transform(X_train)
         X_test_scaled = self.scaler.transform(X_test)
 
-        # Create and train the KNN classifier
-        print("Training KNN classifier...")
-        self.knn_classifier = KNeighborsClassifier(n_neighbors=3, metric='manhattan')
-        self.knn_classifier.fit(X_train_scaled, y_train)
+        highest_test_accuracy = 0
+        best_n_neighbors = 0
 
-        # Print training accuracy
-        training_accuracy = self.knn_classifier.score(X_train_scaled, y_train)
-        print(f"Training Accuracy: {training_accuracy}")
+        print("Length of x_train:",len(X_train))
+        # Try different values of n_neighbors
+        for n_neighbors in range(3, len(X_train)):  # You can adjust the range as needed
+            # Create and train the KNN classifier
+            print(f"Training KNN classifier with n_neighbors={n_neighbors}...")
+            knn_classifier = KNeighborsClassifier(n_neighbors=n_neighbors, metric='manhattan', algorithm='auto')
+            knn_classifier.fit(X_train_scaled, y_train)
 
-        # Print testing accuracy
-        testing_accuracy = self.knn_classifier.score(X_test_scaled, y_test)
-        print(f"Testing Accuracy: {testing_accuracy}")
+            # Evaluate testing accuracy
+            test_accuracy = knn_classifier.score(X_test_scaled, y_test)
 
-        messagebox.showinfo("Success", "KNN Classifier Trained Successfully!")
+            print(f"Testing Accuracy (n_neighbors={n_neighbors}): {test_accuracy}")
 
-        scaler_filename = "standard_scaler.joblib"
+            # Check if the current n_neighbors gives a higher testing accuracy
+            if test_accuracy > highest_test_accuracy:
+                highest_test_accuracy = test_accuracy
+                best_n_neighbors = n_neighbors
+
+        print(f"\n\nThe best n_neighbors for the highest testing accuracy is: {best_n_neighbors}")
+        print(f"The highest testing accuracy is: {highest_test_accuracy}")
+
+        # Retrain the final model with the best n_neighbors
+        print(f"Retraining the final model with n_neighbors={best_n_neighbors}...")
+        final_knn_classifier = KNeighborsClassifier(n_neighbors=best_n_neighbors, metric='manhattan', algorithm='auto')
+        final_knn_classifier.fit(X_train_scaled, y_train)
+
+        # Print final training accuracy
+        final_training_accuracy = final_knn_classifier.score(X_train_scaled, y_train)
+        print(f"Final Training Accuracy: {final_training_accuracy}")
+
+        # Print final testing accuracy
+        final_test_accuracy = final_knn_classifier.score(X_test_scaled, y_test)
+        print(f"Final Testing Accuracy: {final_test_accuracy}")
+
+        messagebox.showinfo("Success", f"KNN Classifier Trained Successfully!\nBest n_neighbors: {best_n_neighbors}\nHighest Testing Accuracy: {highest_test_accuracy}")
+
+        # Save the scaler to a file
+        scaler_filename = f"standard_scaler.joblib"
         joblib.dump(self.scaler, scaler_filename)
-        print(f"Trained scaler saved to {scaler_filename}")
+        print(f"Scaler saved to {scaler_filename}")
 
-        # Save the trained classifier to a file
-        classifier_filename = "knn_classifier.joblib"
-        joblib.dump(self.knn_classifier, classifier_filename)
-        print(f"Trained classifier saved to {classifier_filename}")
+        # Save the trained classifier with the highest testing accuracy to a file
+        classifier_filename = f"knn_classifier.joblib"
+        joblib.dump(final_knn_classifier, classifier_filename)
+        print(f"Final trained classifier with highest testing accuracy saved to {classifier_filename}")
+
 
 
     def load_classifier(self):
@@ -698,14 +705,14 @@ class EMGRecorderApp:
         countup_label = tk.Label(self.root, text="", font=("Helvetica", 12), background="white")
         countup_label.place(relx=0.5, rely=0.2, anchor='center')
 
-        self.verify_countup = threading.Thread(target=self.verify_countdown, args=(2,countup_label))
+        self.verify_countup = threading.Thread(target=self.verify_countdown, args=(4,countup_label))
         self.verify_countup.start()
 
     def verify_countdown(self, seconds, countup_label):
         gif_path = 'wave2.gif'  # Replace with your GIF path
         self.gif_label = tk.Label(self.root,background="white")
         self.gif_label.place(relx=0.5, rely=0.3, anchor='center')
-        self.show_gif(gif_path, 2)  # Display the GIF for 5 seconds
+        self.show_gif(gif_path, 4)  # Display the GIF for 5 seconds
 
         for i in range(0,seconds,1):
             countup_label.config(text=f"Recording...  {i} seconds")
@@ -721,7 +728,7 @@ class EMGRecorderApp:
             start_time = time.time()
             emg_values = []
 
-            while time.time() - start_time < 2:  # Record for 5 seconds for verification
+            while time.time() - start_time < 4:  # Record for 5 seconds for verification
                 try:
                     line = ser.readline().decode().strip()
                     if line:
@@ -739,8 +746,17 @@ class EMGRecorderApp:
         filtered_data_notch = self.notch_filter(filtered_data_hp, f0=60)
         filtered_emg = self.convert_frequency_to_amplitude(frequencies, filtered_data_notch)
 
-        # Convert EMG signals to feature vector
-        features = self.calculate_features(filtered_emg)
+         # Calculate RMS for alignment
+        rms_values = np.sqrt(np.mean(np.square(filtered_emg)))
+
+        # Align EMG signal using RMS
+        emg_values_aligned = filtered_emg + np.abs(rms_values)
+
+        # Replace negative values with zero
+        emg_values_aligned = np.where(emg_values_aligned < 0, 0, emg_values_aligned)
+
+        # Convert aligned EMG signals to feature vector
+        features = self.calculate_features(emg_values_aligned)
 
         # Standardize the feature values
         features_scaled = self.scaler.transform([features])

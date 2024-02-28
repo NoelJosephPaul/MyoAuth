@@ -1,5 +1,10 @@
-#main9.py de 2nd version...here knn is replaced by CNN model tto
+#main11_1.py de 4 second version and removed 2 features (26 Feb 2024)
 
+#-main9.py another version here high pass filter 5Hz is applied
+#-high pass filter 5hz to eliminate direct current offset and persiperation
+#-notch filter 60hz to filter out power line noise
+#-added more features
+ 
 #main8.py de 2 second version
 
 #main5 cont and separate login and register
@@ -26,14 +31,20 @@ import pygame  # Import pygame library
 import imageio
 from ttkthemes import ThemedStyle
 from tkinter import font
-from sklearn.preprocessing import StandardScaler
-from tensorflow.keras.models import Sequential
-from tensorflow.keras.layers import Conv1D, MaxPooling1D, Flatten, Dense
-import tensorflow as tf
-from tensorflow.keras import layers, models
-from tensorflow.keras.models import Sequential, load_model
-from tensorflow.keras.layers import Conv1D, MaxPooling1D, Flatten, Dense
-import os
+from scipy.signal import spectrogram
+from scipy import signal
+from scipy.signal import butter, lfilter
+from scipy.fft import fft, ifft 
+from scipy.signal import iirfilter, lfilter
+from scipy.signal import spectrogram, stft
+from scipy.signal import cwt, morlet
+import matplotlib.pyplot as plt
+import nolds
+from sklearn.metrics import f1_score
+from sklearn.metrics import confusion_matrix
+import seaborn as sns
+import matplotlib.pyplot as plt
+from sklearn.metrics import precision_score, recall_score
 
 
 class EMGRecorderApp:
@@ -52,11 +63,8 @@ class EMGRecorderApp:
         self.user_name = None
         self.initial_option = None
 
-        self.cnn_model = None
+        self.knn_classifier = None
         self.scaler = None
-
-        # Load the CNN model
-        self.load_cnn_model()
 
         # Load and display the image
         image_path = 'myoauthicon.png'  # Replace with your image path
@@ -78,23 +86,6 @@ class EMGRecorderApp:
 
         # Schedule the transition to the main window after 5000 milliseconds (5 seconds)
         self.root.after(2500, self.show_main_window)
-
-    def load_cnn_model(self):
-        model_filename = "cnn_model.h5"
-        if os.path.exists(model_filename):
-            self.cnn_model = models.load_model(model_filename)
-            print(f"Trained CNN model loaded from {model_filename}")
-        else:
-            print("No trained CNN model found. Train the model first.")
-    
-    def load_cnn_scaler(self):
-        # Load the trained scaler for CNN
-        cnn_scaler_filename = "cnn_scaler.joblib"
-        if os.path.exists(cnn_scaler_filename):
-            self.scaler = joblib.load(cnn_scaler_filename)
-            print(f"Trained CNN scaler loaded from {cnn_scaler_filename}")
-        else:
-            print("No trained CNN scaler found.")
 
     def fade_out_audio(self, duration, step):
         current_volume = 2.0
@@ -135,7 +126,7 @@ class EMGRecorderApp:
         self.serial_port = serial_port
         self.emg_data = {}
         self.data_thread = None
-
+        self.load_classifier()
 
     def show_login_window(self):
         # Clear the window
@@ -173,14 +164,18 @@ class EMGRecorderApp:
         self.record_button = ttk.Button(self.root, text="Record EMG Signals", command=self.start_recording_instructions)
         self.record_button.place(relx=0.5, rely=0.3, anchor='center', width=200, height=40)
 
+        # Create "Apply Filtering" button
+        self.filter_button = ttk.Button(self.root, text="Apply Filtering", command=self.open_and_apply_filters)
+        self.filter_button.place(relx=0.5, rely=0.4, anchor='center', width=200, height=40)
+
         self.preprocess_button = ttk.Button(self.root, text="Extract Features", command=self.feature_extract_data)
-        self.preprocess_button.place(relx=0.5, rely=0.4, anchor='center', width=200, height=40)
+        self.preprocess_button.place(relx=0.5, rely=0.5, anchor='center', width=200, height=40)
 
         self.train_button = ttk.Button(self.root, text="Train", command=self.train_classifier)
-        self.train_button.place(relx=0.5, rely=0.5, anchor='center', width=150, height=35)
+        self.train_button.place(relx=0.5, rely=0.6, anchor='center', width=150, height=35)
 
         self.back_button = ttk.Button(self.root, text="Back", command=self.show_main_window)
-        self.back_button.place(relx=0.5, rely=0.6, anchor='center', width=150, height=35)
+        self.back_button.place(relx=0.5, rely=0.7, anchor='center', width=150, height=35)
 
     def step_counter(self):
         # Add your logic for the step counter here
@@ -204,7 +199,7 @@ class EMGRecorderApp:
         self.instructions_label2 = ttk.Label(self.root, text="You will be guided through a series of five steps.", font=("Helvetica", 12), background="white")
         self.instructions_label2.place(relx=0.5, rely=0.2, anchor='center')
 
-        self.instructions_label3 = ttk.Label(self.root, text="During each step, execute a hand gesture for a duration of 2 seconds.", font=("Helvetica", 12), background="white")
+        self.instructions_label3 = ttk.Label(self.root, text="During each step, execute a hand gesture for a duration of 4 seconds.", font=("Helvetica", 12), background="white")
         self.instructions_label3.place(relx=0.5, rely=0.3, anchor='center')
 
         self.instructions_label4 = ttk.Label(self.root, text="It is necessary to maintain uniformity by consistently performing the same gesture at each step.", font=("Helvetica", 12), background="white")
@@ -262,7 +257,7 @@ class EMGRecorderApp:
         countdown_label.place(relx=0.5, rely=0.2, anchor='center')
 
         # Start the countdown in a separate thread
-        countdown_thread = threading.Thread(target=self.start_countdown, args=(2, countdown_label))
+        countdown_thread = threading.Thread(target=self.start_countdown, args=(4, countdown_label))
         countdown_thread.start()
     
     def start_countdown(self, seconds, countdown_label):
@@ -270,7 +265,7 @@ class EMGRecorderApp:
         gif_path = 'wave2.gif'  # Replace with your GIF path
         self.gif_label = tk.Label(self.root,background="white")
         self.gif_label.place(relx=0.5, rely=0.3, anchor='center')
-        self.show_gif(gif_path, 2)  # Display the GIF for 5 seconds
+        self.show_gif(gif_path, 4)  # Display the GIF for 5 seconds
 
         for i in range(0,seconds,1):
             countdown_label.config(text=f"Recording...  {i} seconds")
@@ -334,7 +329,7 @@ class EMGRecorderApp:
             ser.reset_input_buffer()
 
             start_time = time.time()
-            while time.time() - start_time < 2:
+            while time.time() - start_time < 4:
                 try:
                     line = ser.readline().decode().strip()
                     if line:
@@ -366,8 +361,88 @@ class EMGRecorderApp:
                     csv_writer.writerow([user_name, timestamp, emg_value])
 
         print(f"EMG data saved to {filename}")
+        
+    def open_and_apply_filters(self):
+        input_file = filedialog.askopenfilename(title="Select CSV file", filetypes=[("CSV files", "*.csv")])
+
+        if not input_file:
+            return
+
+        output_file = filedialog.asksaveasfilename(title="Save Filtered Data as", defaultextension=".csv", filetypes=[("CSV files", "*.csv")])
+
+        if not output_file:
+            return
+
+        df = pd.read_csv(input_file)
+
+        for user_name, user_data in df.groupby('Username'):
+            emg_values = user_data['emgvalues'].tolist()
+
+            # Convert amplitude to frequency
+            frequencies, fft_values = self.convert_amplitude_to_frequency(emg_values)
+
+            # Apply highpass filter at 5 Hz
+            filtered_data_hp = self.apply_highpass_filter(fft_values, lowcut=5)
+
+            # Apply notch filter at 60 Hz
+            filtered_data_notch = self.notch_filter(filtered_data_hp, f0=60)
+
+            # Convert frequency back to amplitude
+            filtered_emg = self.convert_frequency_to_amplitude(frequencies, filtered_data_notch)
+
+            # Update DataFrame with filtered EMG values
+            df.loc[df['Username'] == user_name, 'emgvalues'] = filtered_emg
+
+        df.to_csv(output_file, index=False)
+
+        print(f"\nFiltered EMG data saved to {output_file}")
+
+    def convert_amplitude_to_frequency(self, amplitude_data):
+        # Use FFT to convert amplitude to frequency
+        fft_values = np.fft.fft(amplitude_data)
+        frequencies = np.fft.fftfreq(len(amplitude_data))
+        return frequencies, fft_values
+
+    def apply_highpass_filter(self, data, lowcut, fs=1000.0, order=4):
+        nyquist = 0.5 * fs
+        low = lowcut / nyquist
+        b, a = butter(order, low, btype='high')
+        filtered_data = lfilter(b, a, data)
+        return filtered_data
+
+    def notch_filter(self, data, f0, fs=1000.0, Q=30.0):
+        nyquist = 0.5 * fs
+        normal_cutoff = f0 / nyquist
+        b, a = iirfilter(2, [normal_cutoff - 1e-3, normal_cutoff + 1e-3], btype='bandstop')
+        filtered_data = lfilter(b, a, data)
+        return filtered_data
+
+    def convert_frequency_to_amplitude(self, frequencies, frequency_data):
+        # Use IFFT to convert frequency back to amplitude
+        time_data = np.fft.ifft(frequency_data)
+        return np.real(time_data)
+    
+    def remove_negatives(self):
+        # Load the CSV file
+        csv_file_path = 'all_users_filtered_emg_data.csv'  # Update the path
+        df = pd.read_csv(csv_file_path)
+
+        # Calculate RMS for alignment
+        rms_values = np.sqrt(np.mean(np.square(df['emgvalues'])))
+        
+        # Align EMG signal using RMS
+        df['emgvalues'] = df['emgvalues'] + np.abs(rms_values)
+
+        # Replace negative values with zero
+        df['emgvalues'] = np.where(df['emgvalues'] < 0, 0, df['emgvalues'])
+
+        # Save the updated DataFrame to the same CSV file
+        df.to_csv(csv_file_path, index=False)
+
+        messagebox.showinfo("Info", "Negative values removed after aligning EMG signal using RMS in all_users_filtered_emg_data.csv")
 
     def feature_extract_data(self):
+        self.remove_negatives()
         input_file = filedialog.askopenfilename(title="Select CSV file", filetypes=[("CSV files", "*.csv")])
 
         if not input_file:
@@ -395,37 +470,111 @@ class EMGRecorderApp:
 
         print(f"\nFeature vectors saved to {output_file}")
 
+    def calculate_cwt_features(self, emg_values):
+        scales = np.arange(1, 128)  # Adjust the range of scales as needed
+        cwt_matrix = cwt(emg_values, morlet, scales)
+        
+        # Calculate statistical features from the CWT matrix
+        cwt_mean = np.mean(np.abs(cwt_matrix), axis=1)
+        cwt_std = np.std(np.abs(cwt_matrix), axis=1)
+        cwt_max = np.max(np.abs(cwt_matrix), axis=1)
+        cwt_min = np.min(np.abs(cwt_matrix), axis=1)
+        
+        # Concatenate all the CWT features into a single list
+        cwt_features = np.concatenate([cwt_mean, cwt_std, cwt_max, cwt_min])
+        
+        return cwt_features
+
     def calculate_features(self, emg_values):
-        # feature extraction
-        features = []
-        features.append(np.mean(np.abs(emg_values),axis=0)) #mean absolute value
-        features.append(np.sum(np.abs(np.diff(emg_values)),axis=0)) #waveform length
-        features.append(np.sum(np.diff(np.sign(emg_values),axis=0)!=0,axis=0)/(len(emg_values)-1))
-        features.append(skew(emg_values,axis=0))
-        features.append(kurtosis(emg_values,axis=0))
-        features.append(np.sqrt(np.mean(np.array(emg_values)**2,axis=0))) #root mean sqaure
-        features.append(np.sum(np.array(emg_values)**2,axis=0)) #simple square integral
+        # 31 features extraction 
+        features = [] 
 
-        # Add Fourier transform as a new feature
+        # Time Domain
+        features.append(np.mean(np.abs(emg_values), axis=0))  # Mean absolute value
+        features.append(np.sum(np.abs(np.diff(emg_values)), axis=0))  # Waveform length
+        features.append(np.sum(np.diff(np.sign(emg_values), axis=0) != 0, axis=0) / (len(emg_values) - 1))
+        features.append(skew(emg_values, axis=0))
+        features.append(kurtosis(emg_values, axis=0))
+        features.append(np.sum(np.array(emg_values)**2, axis=0))  # Simple square integral
+        features.append(nolds.sampen(emg_values))
+        
+
+        # Frequency domain
         fourier_transform = np.abs(np.fft.fft(emg_values))
-        features.append(np.mean(fourier_transform, axis=0))
-
-        # Additional frequency domain features
-        features.append(np.sum(fourier_transform, axis=0))  # Total energy
-        features.append(np.sum(fourier_transform ** 2, axis=0))  # Power
-        features.append(np.argmax(fourier_transform, axis=0))  # Dominant frequency index
 
         # Frequency centroid
         frequency_bins = len(fourier_transform)
         frequency_values = np.fft.fftfreq(frequency_bins, d=1.0)  # Frequency values corresponding to bins
         features.append(np.sum(frequency_values * fourier_transform, axis=0) / np.sum(fourier_transform, axis=0))
 
+        # Additional frequency domain features
+        features.append(np.sum(fourier_transform, axis=0))  # Total energy
+        features.append(np.sum(fourier_transform ** 2, axis=0))  # Power
+        features.append(np.argmax(fourier_transform, axis=0))  # Dominant frequency index
+        features.append(np.mean(frequency_values * fourier_transform, axis=0))  # Mean frequency
+        features.append(np.median(frequency_values * fourier_transform, axis=0))  # Median frequency
+        features.append(np.std(frequency_values * fourier_transform, axis=0))  # Standard deviation of frequency
+        features.append(np.var(frequency_values * fourier_transform, axis=0))  # Variance of frequency
+
+        # Power spectral density (PSD) features
+        psd = np.abs(np.fft.fft(emg_values))**2 / len(emg_values)
+        features.append(np.sum(psd, axis=0))  # Total power
+        features.append(np.mean(psd, axis=0))  # Mean power
+        features.append(np.sum(psd[1:], axis=0))  # Exclude DC component for total power
+        features.append(np.mean(psd[1:], axis=0))  # Exclude DC component for mean power
+
         # Spectral entropy
         spectral_entropy = -np.sum(fourier_transform * np.log2(fourier_transform + 1e-10), axis=0)
         features.append(spectral_entropy)
 
-        return features
+        # New features
+        features.append(np.sum(np.power(emg_values, 4), axis=0) / len(emg_values))  # High order temporal moment
+        features.append(np.mean(np.sqrt(np.abs(emg_values)), axis=0))  # Mean square root
+        features.append(np.mean(np.log(np.abs(emg_values) + 1e-10), axis=0))  # Log detector
+
+        # Time-frequency domain features
+        f, t, Zxx = stft(emg_values, fs=115200, nperseg=64) 
+
+        # Ensure that f has the same length as the second dimension of Zxx
+        if len(f) != Zxx.shape[1]:
+            f = np.linspace(0, 0.5 * 115200, Zxx.shape[1])
+
+        # Average power in each frequency bin over time
+        avg_power_per_freq = np.mean(np.abs(Zxx), axis=1)
+        features.extend(avg_power_per_freq)
+
+        # Total power in each frequency bin over time
+        total_power_per_freq = np.sum(np.abs(Zxx) ** 2, axis=1)
+        features.extend(total_power_per_freq)
+
+        # Peak frequency index in each time segment
+        peak_freq_indices = np.argmax(np.abs(Zxx), axis=0)
+        features.extend(peak_freq_indices)
+
+        # Mean frequency in each time segment
+        mean_freq_per_time = np.sum(f * np.abs(Zxx), axis=0) / np.sum(np.abs(Zxx), axis=0)
+        features.extend(mean_freq_per_time)
+
+        # Median frequency in each time segment
+        median_freq_per_time = np.median(f * np.abs(Zxx), axis=0)
+        features.extend(median_freq_per_time)
+
+        # Standard deviation of frequency in each time segment
+        std_freq_per_time = np.std(f * np.abs(Zxx), axis=0)
+        features.extend(std_freq_per_time)
+
+        # Variance of frequency in each time segment
+        var_freq_per_time = np.var(f * np.abs(Zxx), axis=0)
+        features.extend(var_freq_per_time)
+
+        # Calculate CWT features
+        cwt_features = self.calculate_cwt_features(emg_values)
+
+        # Concatenate CWT features with existing features
+        features.extend(cwt_features)
     
+        return features
+
     def train_classifier(self):
         # Load feature vectors from the CSV file
         input_file = filedialog.askopenfilename(title="Select Feature Vectors CSV file", filetypes=[("CSV files", "*.csv")])
@@ -435,62 +584,115 @@ class EMGRecorderApp:
 
         print("Loading feature vectors...")
         df = pd.read_csv(input_file)
-        # Group by username and split the data
-        train_df, test_df = [], []
-        for username, group in df.groupby('Username'):
-            # Select 4 random samples for training
-            train_data = group.sample(n=4, random_state=42)
-            # Remaining one sample for testing
-            test_data = group.drop(train_data.index)
+        df['Features'] = df['Features'].apply(lambda x: eval(x))  # Convert string to list
 
-            train_df.append(train_data)
-            test_df.append(test_data)
+        # Assuming 'Username' is the column containing user names
+        unique_users = df['Username'].unique()
+        print(unique_users)
 
-        # Combine the dataframes for training and testing
-        train_df = pd.concat(train_df)
-        test_df = pd.concat(test_df)
+        # Create testing dataset with one feature vector per user
+        testing_data = []
+        for user in unique_users:
+            user_data = df[df['Username'] == user].head(1)  # Select last row for each user
+            testing_data.append(user_data)
 
-        # Extract features and labels
-        X_train = np.array([eval(features) for features in train_df['Features']])
-        y_train = train_df['Username'].astype('category').cat.codes.values
+        testing_df = pd.concat(testing_data)
+        training_df = df.drop(testing_df.index)
 
-        X_test = np.array([eval(features) for features in test_df['Features']])
-        y_test = test_df['Username'].astype('category').cat.codes.values
+        # Extract features and labels from training and testing datasets
+        X_train = np.vstack(training_df['Features'])
+        y_train = training_df['Username']
+        X_test = np.vstack(testing_df['Features'])
+        y_test = testing_df['Username']
 
-        # Standardize the input features
-        scaler = StandardScaler()
-        X_train = scaler.fit_transform(X_train)
-        X_test = scaler.transform(X_test)
+        #print(X_train)
+        #print(y_train)
 
-        # Reshape the data for CNN input
-        X_train = X_train.reshape(X_train.shape[0], X_train.shape[1], 1)
-        X_test = X_test.reshape(X_test.shape[0], X_test.shape[1], 1)
+        # Standardize the feature values
+        print("Standardizing feature values...")
+        self.scaler = StandardScaler()
+        X_train_scaled = self.scaler.fit_transform(X_train)
+        X_test_scaled = self.scaler.transform(X_test)
 
-        # Build the CNN model
-        self.cnn_model = Sequential()
-        self.cnn_model.add(Conv1D(32, kernel_size=3, activation='relu', input_shape=(X_train.shape[1], 1)))
-        self.cnn_model.add(MaxPooling1D(pool_size=2))
-        self.cnn_model.add(Flatten())
-        self.cnn_model.add(Dense(128, activation='relu'))
-        self.cnn_model.add(Dense(len(np.unique(y_train)), activation='softmax'))
+        # Create and train the KNN classifier
+        print("Training KNN classifier...")
+        self.knn_classifier = KNeighborsClassifier(n_neighbors=3, metric='manhattan',algorithm='auto')
+        self.knn_classifier.fit(X_train_scaled, y_train)
 
-        # Compile the model
-        self.cnn_model.compile(loss='sparse_categorical_crossentropy', optimizer='adam', metrics=['accuracy'])
+        # Print training accuracy
+        training_accuracy = self.knn_classifier.score(X_train_scaled, y_train)
+        print(f"Training Accuracy: {training_accuracy}")
 
-        # Train the model
-        self.cnn_model.fit(X_train, y_train, epochs=100, batch_size=16, validation_data=(X_test, y_test))
+        # Print testing accuracy
+        testing_accuracy = self.knn_classifier.score(X_test_scaled, y_test)
+        print(f"Testing Accuracy: {testing_accuracy}")
 
-        # Save the trained model
-        self.cnn_model.save("cnn_model.h5")
-        joblib.dump(scaler, "cnn_scaler.joblib")
+        # Predict on the test set
+        y_pred = self.knn_classifier.predict(X_test_scaled)
 
-        print("CNN Classifier Trained Successfully!")
+        # Calculate F1 score
+        f1 = f1_score(y_test, y_pred, average='weighted')  # You can adjust the 'average' parameter as needed
+
+        print(f"F1 Score: {f1}")
+
+        # Predict on the test set
+        y_pred = self.knn_classifier.predict(X_test_scaled)
+
+        # Calculate confusion matrix
+        conf_matrix = confusion_matrix(y_test, y_pred)
+
+        # Display confusion matrix using seaborn heatmap
+        plt.figure(figsize=(10, 8))
+        sns.heatmap(conf_matrix, annot=True, fmt='g', cmap='Blues', cbar=False)
+        plt.xlabel('Predicted')
+        plt.ylabel('True')
+        plt.title('Confusion Matrix')
+        #plt.show()
+
+        # Calculate False Acceptance Rate (FAR) and False Rejection Rate (FRR)
+        far = conf_matrix.sum(axis=0) - np.diag(conf_matrix)
+        frr = conf_matrix.sum(axis=1) - np.diag(conf_matrix)
+
+        far = far / far.sum()  # Normalize FAR
+        frr = frr / frr.sum()  # Normalize FRR
+
+        print(f"FAR: {far.mean()}")
+        print(f"FRR: {frr.mean()}")
+
+        messagebox.showinfo("Success", "KNN Classifier Trained Successfully!")
+
+        scaler_filename = "standard_scaler.joblib"
+        joblib.dump(self.scaler, scaler_filename)
+        print(f"Trained scaler saved to {scaler_filename}")
+
+        # Save the trained classifier to a file
+        classifier_filename = "knn_classifier.joblib"
+        joblib.dump(self.knn_classifier, classifier_filename)
+        print(f"Trained classifier saved to {classifier_filename}")
+
+
+    def load_classifier(self):
+        classifier_filename = "knn_classifier.joblib"
+        if os.path.exists(classifier_filename):
+            self.knn_classifier = joblib.load(classifier_filename)
+            print(f"Trained classifier loaded from {classifier_filename}")
+            self.load_scaler()  # Load the associated scaler
+        else:
+            print("No trained classifier found. Train the classifier first.")
+
+    def load_scaler(self):
+        scaler_filename = "standard_scaler.joblib"
+        if os.path.exists(scaler_filename):
+            self.scaler = joblib.load(scaler_filename)
+            print(f"Trained scaler loaded from {scaler_filename}")
+        else:
+            print("No trained scaler found.")
 
     def verify_person(self):
 
-        '''if not self.cnn_classifier:
+        if not self.knn_classifier:
             messagebox.showinfo("Error", "Please train the classifier first.")
-            return'''
+            return
 
         user_name = self.user_entry.get()
 
@@ -506,14 +708,14 @@ class EMGRecorderApp:
         countup_label = tk.Label(self.root, text="", font=("Helvetica", 12), background="white")
         countup_label.place(relx=0.5, rely=0.2, anchor='center')
 
-        self.verify_countup = threading.Thread(target=self.verify_countdown, args=(2,countup_label))
+        self.verify_countup = threading.Thread(target=self.verify_countdown, args=(4,countup_label))
         self.verify_countup.start()
 
     def verify_countdown(self, seconds, countup_label):
         gif_path = 'wave2.gif'  # Replace with your GIF path
         self.gif_label = tk.Label(self.root,background="white")
         self.gif_label.place(relx=0.5, rely=0.3, anchor='center')
-        self.show_gif(gif_path, 2)  # Display the GIF for 5 seconds
+        self.show_gif(gif_path, 4)  # Display the GIF for 5 seconds
 
         for i in range(0,seconds,1):
             countup_label.config(text=f"Recording...  {i} seconds")
@@ -529,7 +731,7 @@ class EMGRecorderApp:
             start_time = time.time()
             emg_values = []
 
-            while time.time() - start_time < 2:  # Record for 5 seconds for verification
+            while time.time() - start_time < 4:  # Record for 5 seconds for verification
                 try:
                     line = ser.readline().decode().strip()
                     if line:
@@ -539,52 +741,56 @@ class EMGRecorderApp:
                 except ValueError as e:
                     print(f"Error parsing data: {e}")
 
-        # Convert EMG signals to feature vector
-        features = self.calculate_features(emg_values)
-        #print(features)
+        self.load_classifier() 
 
-        # Standardize the feature values (skip this step for CNN)
-        scaler=joblib.load("cnn_scaler.joblib")
-        features_scaled = scaler.transform([features])
+        # Apply filters to the EMG signals
+        frequencies, fft_values = self.convert_amplitude_to_frequency(emg_values)
+        filtered_data_hp = self.apply_highpass_filter(fft_values, lowcut=5)
+        filtered_data_notch = self.notch_filter(filtered_data_hp, f0=60)
+        filtered_emg = self.convert_frequency_to_amplitude(frequencies, filtered_data_notch)
 
-        # Reshape the data for CNN input
-        #features_reshaped = np.array(features_scaled).reshape(1, len(features_scaled), 1)
+         # Calculate RMS for alignment
+        rms_values = np.sqrt(np.mean(np.square(filtered_emg)))
 
-        self.load_cnn_model()
-        self.load_cnn_scaler()
-        # Load the trained CNN model
-        model = load_model("cnn_model.h5")
+        # Align EMG signal using RMS
+        emg_values_aligned = filtered_emg + np.abs(rms_values)
 
-        # Predict the person using the trained CNN model
-        predictions = model.predict(features_scaled)
-        print(predictions)
-        predicted_label = np.argmax(predictions)
-        print(predicted_label)
+        # Replace negative values with zero
+        emg_values_aligned = np.where(emg_values_aligned < 0, 0, emg_values_aligned)
+
+        # Convert aligned EMG signals to feature vector
+        features = self.calculate_features(emg_values_aligned)
+
+        # Standardize the feature values
+        features_scaled = self.scaler.transform([features])
+
+        # Predict the person using the trained KNN classifier
+        predicted_person = self.knn_classifier.predict(features_scaled)
+        print(predicted_person)
 
         self.clear_window()
 
-        self.verification_label = ttk.Label(self.root, text="Verification Result", font=("Helvetica", 14, "bold"), background="white", foreground="green")
+        self.verification_label = ttk.Label(self.root, text="Verification Result", font=("Helvetica", 14,"bold"), background="white",foreground="green")
         self.verification_label.place(relx=0.5, rely=0.1, anchor='center')
 
-        self.result_label = ttk.Label(self.root, text="", font=("Helvetica", 14, "bold"), background="white", foreground="black")
+        self.result_label = ttk.Label(self.root, text="", font=("Helvetica", 14,"bold"), background="white",foreground="black")
         self.result_label.place(relx=0.5, rely=0.3, anchor='center')
 
-        self.image_label = tk.Label(self.root, background="white")
+        self.image_label = tk.Label(self.root,background="white")
         self.image_label.place(relx=0.5, rely=0.47, anchor='center')
 
         self.back_button = ttk.Button(self.root, text="Back", command=self.show_main_window)
         self.back_button.place(relx=0.5, rely=0.65, anchor='center', width=150, height=35)
-
-        if predicted_label == user_name:  # Modify this condition based on your label encoding
-            # messagebox.showinfo("Verification Result", f"Person Verified: {predicted_person}")
+    
+        if predicted_person == user_name:
             image_path = 'tick2.png'
             audio_path = 'myoauthintro.mp3'
-            self.result_label.config(text=f"Authentication success. Identified Person: {predicted_label}")
+            self.result_label.config(text=f"Authentication success. Identified Person: {predicted_person}")
         else:
-            # messagebox.showinfo("Verification Result", "Authentication Failed")
             image_path = 'wrong.png'
             audio_path = 'wrong.mp3'
             self.result_label.config(text="Authentication failed")
+
 
         original_image = Image.open(image_path)
         resized_image = original_image.resize((100, 100), Image.LANCZOS)
@@ -594,7 +800,7 @@ class EMGRecorderApp:
         # Play audio
         pygame.init()
         pygame.mixer.music.load(audio_path)  # Replace with your audio file path
-        pygame.mixer.music.play(0, 0, 1)
+        pygame.mixer.music.play(0,0,1)
 
         
 if __name__ == "__main__":

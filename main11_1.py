@@ -1,4 +1,8 @@
-#main9.py de vere version ...here amplitude values ar converted into audio
+#-main9.py another version here high pass filter 5Hz is applied
+#-high pass filter 5hz to eliminate direct current offset and persiperation
+#-notch filter 60hz to filter out power line noise
+#-added more features
+ 
 
 #main8.py de 2 second version
 
@@ -28,8 +32,13 @@ from ttkthemes import ThemedStyle
 from tkinter import font
 from scipy.signal import spectrogram
 from scipy import signal
-import scipy.io.wavfile as wav
-
+from scipy.signal import butter, lfilter
+from scipy.fft import fft, ifft 
+from scipy.signal import iirfilter, lfilter
+from scipy.signal import spectrogram, stft
+from scipy.signal import cwt, morlet
+import matplotlib.pyplot as plt
+import nolds
 
 
 class EMGRecorderApp:
@@ -149,14 +158,18 @@ class EMGRecorderApp:
         self.record_button = ttk.Button(self.root, text="Record EMG Signals", command=self.start_recording_instructions)
         self.record_button.place(relx=0.5, rely=0.3, anchor='center', width=200, height=40)
 
+        # Create "Apply Filtering" button
+        self.filter_button = ttk.Button(self.root, text="Apply Filtering", command=self.open_and_apply_filters)
+        self.filter_button.place(relx=0.5, rely=0.4, anchor='center', width=200, height=40)
+
         self.preprocess_button = ttk.Button(self.root, text="Extract Features", command=self.feature_extract_data)
-        self.preprocess_button.place(relx=0.5, rely=0.4, anchor='center', width=200, height=40)
+        self.preprocess_button.place(relx=0.5, rely=0.5, anchor='center', width=200, height=40)
 
         self.train_button = ttk.Button(self.root, text="Train", command=self.train_classifier)
-        self.train_button.place(relx=0.5, rely=0.5, anchor='center', width=150, height=35)
+        self.train_button.place(relx=0.5, rely=0.6, anchor='center', width=150, height=35)
 
         self.back_button = ttk.Button(self.root, text="Back", command=self.show_main_window)
-        self.back_button.place(relx=0.5, rely=0.6, anchor='center', width=150, height=35)
+        self.back_button.place(relx=0.5, rely=0.7, anchor='center', width=150, height=35)
 
     def step_counter(self):
         # Add your logic for the step counter here
@@ -342,53 +355,88 @@ class EMGRecorderApp:
                     csv_writer.writerow([user_name, timestamp, emg_value])
 
         print(f"EMG data saved to {filename}")
+        
+    def open_and_apply_filters(self):
+        input_file = filedialog.askopenfilename(title="Select CSV file", filetypes=[("CSV files", "*.csv")])
 
-    def process_emg_data(self, csv_file_path):
-        # Load CSV file
-        emg_data = pd.read_csv(csv_file_path)
+        if not input_file:
+            return
 
-        # Process data for each unique user
-        unique_users = emg_data['Username'].unique()
-        for user_name in unique_users:
-            user_data = emg_data[emg_data['Username'] == user_name]
+        output_file = filedialog.asksaveasfilename(title="Save Filtered Data as", defaultextension=".csv", filetypes=[("CSV files", "*.csv")])
 
-            # Extract EMG values for the user
-            emg_values = user_data['emgvalues']
+        if not output_file:
+            return
 
-            # Ensure the audio is exactly 2 seconds long
-            emg_values = self.adjust_emg_duration(emg_values)
+        df = pd.read_csv(input_file)
 
-            # Convert the EMG values to audio
-            self.save_amplitude_values_as_continuous_audio(user_name, emg_values)
+        for user_name, user_data in df.groupby('Username'):
+            emg_values = user_data['emgvalues'].tolist()
 
-    def adjust_emg_duration(self, emg_values, target_duration=2):
-        # Adjust the length of emg_values to match the target duration
-        current_duration = len(emg_values)
-        if current_duration < target_duration:
-            # Pad with zeros to achieve the target duration
-            emg_values = np.pad(emg_values, (0, target_duration - current_duration), mode='constant')
-        elif current_duration > target_duration:
-            # Truncate to the target duration
-            emg_values = emg_values[:target_duration]
-        return emg_values
+            # Convert amplitude to frequency
+            frequencies, fft_values = self.convert_amplitude_to_frequency(emg_values)
 
-    def save_amplitude_values_as_continuous_audio(self, user_name, emg_values):
-        # Set the sampling rate for your audio file (you can adjust this)
-        sampling_rate = 44100  # 44.1 kHz is a common value
+            # Apply highpass filter at 5 Hz
+            filtered_data_hp = self.apply_highpass_filter(fft_values, lowcut=5)
 
-        # Normalize the EMG signal to be in the range [-1, 1]
-        normalized_emg = 2 * (emg_values - np.min(emg_values)) / np.ptp(emg_values) - 1
+            # Apply notch filter at 60 Hz
+            filtered_data_notch = self.notch_filter(filtered_data_hp, f0=60)
 
-        # Convert the normalized EMG signal to audio
-        audio_data = (normalized_emg * 32767).astype(np.int16)
+            # Convert frequency back to amplitude
+            filtered_emg = self.convert_frequency_to_amplitude(frequencies, filtered_data_notch)
 
-        # Save the audio to a WAV file with the username in the filename
-        filename = f'{user_name}_emg_continuous_audio.wav'
-        wav.write(filename, sampling_rate, audio_data)
-        print("hi")
+            # Update DataFrame with filtered EMG values
+            df.loc[df['Username'] == user_name, 'emgvalues'] = filtered_emg
 
+        df.to_csv(output_file, index=False)
+
+        print(f"\nFiltered EMG data saved to {output_file}")
+
+    def convert_amplitude_to_frequency(self, amplitude_data):
+        # Use FFT to convert amplitude to frequency
+        fft_values = np.fft.fft(amplitude_data)
+        frequencies = np.fft.fftfreq(len(amplitude_data))
+        return frequencies, fft_values
+
+    def apply_highpass_filter(self, data, lowcut, fs=1000.0, order=4):
+        nyquist = 0.5 * fs
+        low = lowcut / nyquist
+        b, a = butter(order, low, btype='high')
+        filtered_data = lfilter(b, a, data)
+        return filtered_data
+
+    def notch_filter(self, data, f0, fs=1000.0, Q=30.0):
+        nyquist = 0.5 * fs
+        normal_cutoff = f0 / nyquist
+        b, a = iirfilter(2, [normal_cutoff - 1e-3, normal_cutoff + 1e-3], btype='bandstop')
+        filtered_data = lfilter(b, a, data)
+        return filtered_data
+
+    def convert_frequency_to_amplitude(self, frequencies, frequency_data):
+        # Use IFFT to convert frequency back to amplitude
+        time_data = np.fft.ifft(frequency_data)
+        return np.real(time_data)
+    
+    def remove_negatives(self):
+        # Load the CSV file
+        csv_file_path = 'all_users_filtered_emg_data.csv'  # Update the path
+        df = pd.read_csv(csv_file_path)
+
+        # Calculate RMS for alignment
+        rms_values = np.sqrt(np.mean(np.square(df['emgvalues'])))
+        
+        # Align EMG signal using RMS
+        df['emgvalues'] = df['emgvalues'] + np.abs(rms_values)
+
+        # Replace negative values with zero
+        df['emgvalues'] = np.where(df['emgvalues'] < 0, 0, df['emgvalues'])
+
+        # Save the updated DataFrame to the same CSV file
+        df.to_csv(csv_file_path, index=False)
+
+        messagebox.showinfo("Info", "Negative values removed after aligning EMG signal using RMS in all_users_filtered_emg_data.csv")
 
     def feature_extract_data(self):
+        self.remove_negatives()
         input_file = filedialog.askopenfilename(title="Select CSV file", filetypes=[("CSV files", "*.csv")])
 
         if not input_file:
@@ -402,9 +450,6 @@ class EMGRecorderApp:
         self.extract_features(input_file, output_file)
 
     def extract_features(self, input_file, output_file):
-
-        self.process_emg_data('all_users_emg_data.csv')
-
         df = pd.read_csv(input_file)
 
         feature_vectors = []
@@ -419,24 +464,41 @@ class EMGRecorderApp:
 
         print(f"\nFeature vectors saved to {output_file}")
 
+    def calculate_cwt_features(self, emg_values):
+        scales = np.arange(1, 128)  # Adjust the range of scales as needed
+        cwt_matrix = cwt(emg_values, morlet, scales)
+        
+        # Calculate statistical features from the CWT matrix
+        cwt_mean = np.mean(np.abs(cwt_matrix), axis=1)
+        cwt_std = np.std(np.abs(cwt_matrix), axis=1)
+        cwt_max = np.max(np.abs(cwt_matrix), axis=1)
+        cwt_min = np.min(np.abs(cwt_matrix), axis=1)
+        
+        # Concatenate all the CWT features into a single list
+        cwt_features = np.concatenate([cwt_mean, cwt_std, cwt_max, cwt_min])
+        
+        return cwt_features
+
     def calculate_features(self, emg_values):
         # feature extraction time domain
         features = []
         
-        features.append(np.mean(emg_values) / np.std(emg_values)) #snr
-        features.append(np.mean(np.abs(emg_values))) #baseline noise
-        features.append(np.max(emg_values) - np.min(emg_values)) #line interface
+        #features.append(np.mean(emg_values) / np.std(emg_values))  # SNR
+        #features.append(np.mean(np.abs(emg_values)))  # Baseline noise
+        #features.append(np.max(emg_values) - np.min(emg_values))  # Line interface
 
+        features.append(np.mean(np.abs(emg_values), axis=0))  # Mean absolute value
+        features.append(np.sum(np.abs(np.diff(emg_values)), axis=0))  # Waveform length
+        features.append(np.sum(np.diff(np.sign(emg_values), axis=0) != 0, axis=0) / (len(emg_values) - 1))
+        features.append(skew(emg_values, axis=0))
+        features.append(kurtosis(emg_values, axis=0))
+        features.append(np.sqrt(np.mean(np.array(emg_values)**2, axis=0)))  # Root mean square
+        features.append(np.sum(np.array(emg_values)**2, axis=0))  # Simple square integral
 
-        features.append(np.mean(np.abs(emg_values),axis=0)) #mean absolute value
-        features.append(np.sum(np.abs(np.diff(emg_values)),axis=0)) #waveform length
-        features.append(np.sum(np.diff(np.sign(emg_values),axis=0)!=0,axis=0)/(len(emg_values)-1))
-        features.append(skew(emg_values,axis=0))
-        features.append(kurtosis(emg_values,axis=0))
-        features.append(np.sqrt(np.mean(np.array(emg_values)**2,axis=0))) #root mean sqaure
-        features.append(np.sum(np.array(emg_values)**2,axis=0)) #simple square integral
+        features.append(nolds.sampen(emg_values))
+        
 
-        #frequency domain
+        # Frequency domain
         # Add Fourier transform as a new feature
         fourier_transform = np.abs(np.fft.fft(emg_values))
         features.append(np.mean(fourier_transform, axis=0))
@@ -462,14 +524,80 @@ class EMGRecorderApp:
         features.append(np.sum(psd[1:], axis=0))  # Exclude DC component for total power
         features.append(np.mean(psd[1:], axis=0))  # Exclude DC component for mean power
 
-
-
         # Spectral entropy
         spectral_entropy = -np.sum(fourier_transform * np.log2(fourier_transform + 1e-10), axis=0)
         features.append(spectral_entropy)
+
+        # New features
+        features.append(np.sum(np.power(emg_values, 4), axis=0) / len(emg_values))  # High order temporal moment
+        features.append(np.mean(np.sqrt(np.abs(emg_values)), axis=0))  # Mean square root
+        features.append(np.mean(np.log(np.abs(emg_values) + 1e-10), axis=0))  # Log detector
+
+        '''# Time-frequency domain features
+        emg_values_array = np.array(emg_values)
+        emg_values_array = emg_values_array.reshape(-1, 1)
+        _, _, Sxx = spectrogram(emg_values_array, fs=115200, nperseg=2)
+        
+        # Spectrogram features
+        features.append(np.mean(Sxx, axis=0))  # Mean of the spectrogram
+        features.append(np.max(Sxx, axis=0))   # Maximum of the spectrogram
+        features.append(np.min(Sxx, axis=0))   # Minimum of the spectrogram
+        features.append(np.std(Sxx, axis=0))   # Standard deviation of the spectrogram
+        
+        # Additional time-frequency features
+        features.append(np.sum(Sxx, axis=0))  # Total energy in the spectrogram
+        features.append(np.sum(Sxx ** 2, axis=0))  # Power in the spectrogram'''
+
+        # Time-frequency domain features
+        f, t, Zxx = stft(emg_values, fs=115200, nperseg=64)  # You can adjust nperseg based on your requirements
+
+        # Ensure that f has the same length as the second dimension of Zxx
+        if len(f) != Zxx.shape[1]:
+            f = np.linspace(0, 0.5 * 115200, Zxx.shape[1])
+
+        # Average power in each frequency bin over time
+        avg_power_per_freq = np.mean(np.abs(Zxx), axis=1)
+        features.extend(avg_power_per_freq)
+
+        # Total power in each frequency bin over time
+        total_power_per_freq = np.sum(np.abs(Zxx) ** 2, axis=1)
+        features.extend(total_power_per_freq)
+
+        # Peak frequency index in each time segment
+        peak_freq_indices = np.argmax(np.abs(Zxx), axis=0)
+        features.extend(peak_freq_indices)
+
+        # Mean frequency in each time segment
+        mean_freq_per_time = np.sum(f * np.abs(Zxx), axis=0) / np.sum(np.abs(Zxx), axis=0)
+        features.extend(mean_freq_per_time)
+
+        # Median frequency in each time segment
+        median_freq_per_time = np.median(f * np.abs(Zxx), axis=0)
+        features.extend(median_freq_per_time)
+
+        # Standard deviation of frequency in each time segment
+        std_freq_per_time = np.std(f * np.abs(Zxx), axis=0)
+        features.extend(std_freq_per_time)
+
+        # Variance of frequency in each time segment
+        var_freq_per_time = np.var(f * np.abs(Zxx), axis=0)
+        features.extend(var_freq_per_time)
+
+        # Calculate CWT features
+        cwt_features = self.calculate_cwt_features(emg_values)
+
+        # Concatenate CWT features with existing features
+        features.extend(cwt_features)
     
         return features
     
+    def preprocess_features_string(self,features_str):
+        # Replace 'array(' with '[' and '])' with ']' to handle nested arrays
+        features_str = features_str.replace('array([[', '[').replace(']])', ']')
+        features_str = features_str.replace('array([', '[').replace('])', ']')
+        features_str = features_str.replace('array(', '[').replace('])', ']')
+        return features_str
+
     def train_classifier(self):
         # Load feature vectors from the CSV file
         input_file = filedialog.askopenfilename(title="Select Feature Vectors CSV file", filetypes=[("CSV files", "*.csv")])
@@ -479,6 +607,21 @@ class EMGRecorderApp:
 
         print("Loading feature vectors...")
         df = pd.read_csv(input_file)
+        # Apply preprocessing to the 'Features' column
+
+        # Print the 'Features' column before applying ast.literal_eval
+        #print("Features column before conversion:")
+        #print(df['Features'])
+
+        df['Features'] = df['Features'].apply(self.preprocess_features_string)
+
+        #problematic_values = df[df['Features'].apply(lambda x: not isinstance(x, str))]
+        #print("Problematic values:", problematic_values)
+
+
+        # Now, you should be able to use ast.literal_eval without issues
+        #df['Features'] = df['Features'].apply(lambda x:ast.literal_eval(x))
+
         df['Features'] = df['Features'].apply(lambda x: eval(x))  # Convert string to list
 
         # Assuming 'Username' is the column containing user names
@@ -499,8 +642,8 @@ class EMGRecorderApp:
         X_test = np.vstack(testing_df['Features'])
         y_test = testing_df['Username']
 
-        print(X_train)
-        print(y_train)
+        #print(X_train)
+        #print(y_train)
 
         # Standardize the feature values
         print("Standardizing feature values...")
@@ -510,7 +653,7 @@ class EMGRecorderApp:
 
         # Create and train the KNN classifier
         print("Training KNN classifier...")
-        self.knn_classifier = KNeighborsClassifier(n_neighbors=1, metric='manhattan')
+        self.knn_classifier = KNeighborsClassifier(n_neighbors=3, metric='manhattan',algorithm='auto')
         self.knn_classifier.fit(X_train_scaled, y_train)
 
         # Print training accuracy
@@ -549,7 +692,6 @@ class EMGRecorderApp:
             print(f"Trained scaler loaded from {scaler_filename}")
         else:
             print("No trained scaler found.")
-
 
     def verify_person(self):
 
@@ -606,15 +748,28 @@ class EMGRecorderApp:
 
         self.load_classifier()  # You may need to modify this method to load the scaler
 
-        # Convert EMG signals to feature vector
-        features = self.calculate_features(emg_values)
-        #print(features)
+        # Apply filters to the EMG signals
+        frequencies, fft_values = self.convert_amplitude_to_frequency(emg_values)
+        filtered_data_hp = self.apply_highpass_filter(fft_values, lowcut=5)
+        filtered_data_notch = self.notch_filter(filtered_data_hp, f0=60)
+        filtered_emg = self.convert_frequency_to_amplitude(frequencies, filtered_data_notch)
+
+         # Calculate RMS for alignment
+        rms_values = np.sqrt(np.mean(np.square(filtered_emg)))
+
+        # Align EMG signal using RMS
+        emg_values_aligned = filtered_emg + np.abs(rms_values)
+
+        # Replace negative values with zero
+        emg_values_aligned = np.where(emg_values_aligned < 0, 0, emg_values_aligned)
+
+        # Convert aligned EMG signals to feature vector
+        features = self.calculate_features(emg_values_aligned)
 
         # Standardize the feature values
         features_scaled = self.scaler.transform([features])
-        #print(features_scaled)
 
-        #Predict the person using the trained KNN classifier
+        # Predict the person using the trained KNN classifier
         predicted_person = self.knn_classifier.predict(features_scaled)
         print(predicted_person)
 
