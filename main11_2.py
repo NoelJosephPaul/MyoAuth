@@ -471,7 +471,7 @@ class EMGRecorderApp:
         print(f"\nFeature vectors saved to {output_file}")
 
     def calculate_cwt_features(self, emg_values):
-        scales = np.arange(1, 128)  # Adjust the range of scales as needed
+        scales = np.arange(1, 128) 
         cwt_matrix = cwt(emg_values, morlet, scales)
         
         # Calculate statistical features from the CWT matrix
@@ -492,7 +492,7 @@ class EMGRecorderApp:
         # Time Domain
         features.append(np.mean(np.abs(emg_values), axis=0))  # Mean absolute value
         features.append(np.sum(np.abs(np.diff(emg_values)), axis=0))  # Waveform length
-        features.append(np.sum(np.diff(np.sign(emg_values), axis=0) != 0, axis=0) / (len(emg_values) - 1))
+        features.append(np.sum(np.diff(np.sign(emg_values), axis=0) != 0, axis=0) / (len(emg_values) - 1)) #Zero Crossing Rate
         features.append(skew(emg_values, axis=0))
         features.append(kurtosis(emg_values, axis=0))
         features.append(np.sum(np.array(emg_values)**2, axis=0))  # Simple square integral
@@ -574,7 +574,7 @@ class EMGRecorderApp:
         features.extend(cwt_features)
     
         return features
-
+    
     def train_classifier(self):
         # Load feature vectors from the CSV file
         input_file = filedialog.askopenfilename(title="Select Feature Vectors CSV file", filetypes=[("CSV files", "*.csv")])

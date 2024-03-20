@@ -696,13 +696,12 @@ class EMGRecorderApp:
         confidence_scores = self.knn_classifier.predict_proba(features_scaled)
         print(confidence_scores)
 
-        # Get the index of the class for the entered username
-        user_class_index = self.knn_classifier.classes_.tolist().index(user_name)
-        
-        # Get the confidence for the entered username's class
-        confidence = confidence_scores[0, user_class_index]
+        # Get the confidence for the entered username's class (replace 'class_index' with the correct index)
+        class_index = self.knn_classifier.classes_.tolist().index(user_name)
+        confidence = confidence_scores[0, class_index]
 
         print(f"Confidence for {user_name}: {confidence}")
+
 
         self.clear_window()
 
