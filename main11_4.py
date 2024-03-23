@@ -361,6 +361,46 @@ class EMGRecorderApp:
                     csv_writer.writerow([user_name, timestamp, emg_value])
 
         print(f"EMG data saved to {filename}")
+        # Segment and append data to CSV after recording
+        self.segment_and_append_to_csv(user_name)
+
+    def segment_and_append_to_csv(self, user_name):
+        # Define window length and overlap
+        window_length = 2  # in seconds
+        overlap = 1  # in seconds
+
+        emg_data = self.emg_data[user_name]  # Get the recorded EMG data
+        num_samples = len(emg_data)
+        sample_rate = num_samples / 4  # Assuming 4 seconds recording
+
+        # Calculate the number of windows with overlap
+        num_windows = int((num_samples - window_length * sample_rate) / (overlap * sample_rate)) + 1
+
+        # Create a DataFrame to store segmented data
+        columns = ["Username", "Window Number", "Start Time", "End Time", "EMG Values"]
+        segmented_df = pd.DataFrame(columns=columns)
+
+        for window_num in range(num_windows):
+            start_index = int(window_num * overlap * sample_rate)
+            end_index = int(start_index + window_length * sample_rate)
+
+            window_data = emg_data[start_index:end_index]
+
+            start_time = window_data[0][0]
+            end_time = window_data[-1][0]
+            emg_values = [emg_value for _, emg_value in window_data]
+
+            # Append data to the DataFrame
+            segmented_df.loc[len(segmented_df)] = [user_name, window_num + 1, start_time, end_time, emg_values]
+
+        # Append segmented data to the CSV file
+        filename = "segmented_emg_data.csv"
+        if os.path.isfile(filename):
+            segmented_df.to_csv(filename, mode='a', header=False, index=False)
+        else:
+            segmented_df.to_csv(filename, index=False)
+
+        print(f"Segmented EMG data appended to {filename}")
         
     def open_and_apply_filters(self):
         input_file = filedialog.askopenfilename(title="Select CSV file", filetypes=[("CSV files", "*.csv")])

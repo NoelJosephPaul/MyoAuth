@@ -1,3 +1,5 @@
+#main11_4.py de vere versiion here instead of knn svm binary is used
+
 #main11_1.py de 4 second version and removed 2 features (26 Feb 2024)
 
 #-main9.py another version here high pass filter 5Hz is applied
@@ -45,6 +47,7 @@ from sklearn.metrics import confusion_matrix
 import seaborn as sns
 import matplotlib.pyplot as plt
 from sklearn.metrics import precision_score, recall_score
+from sklearn.svm import SVC
 
 
 class EMGRecorderApp:
@@ -63,7 +66,7 @@ class EMGRecorderApp:
         self.user_name = None
         self.initial_option = None
 
-        self.knn_classifier = None
+        self.svm_models = {}  # Dictionary to store SVM models for each user
         self.scaler = None
 
         # Load and display the image
@@ -71,11 +74,11 @@ class EMGRecorderApp:
         original_image = Image.open(image_path)
         resized_image = original_image.resize((200, 200), Image.LANCZOS)
         self.image = ImageTk.PhotoImage(resized_image)
-        self.image_label = tk.Label(self.root, image=self.image,background="white")
+        self.image_label = tk.Label(self.root, image=self.image, background="white")
         self.image_label.place(relx=0.5, rely=0.4, anchor='center')
 
         # Create a label for the title
-        self.title_label = ttk.Label(self.root, text="MyoAuth", font=("Calibri", 25), foreground='green',background="white")
+        self.title_label = ttk.Label(self.root, text="MyoAuth", font=("Calibri", 25), foreground='green', background="white")
         self.title_label.place(relx=0.5, rely=0.65, anchor='center')
 
         # Play audio when the title is shown
@@ -126,7 +129,6 @@ class EMGRecorderApp:
         self.serial_port = serial_port
         self.emg_data = {}
         self.data_thread = None
-        self.load_classifier()
 
     def show_login_window(self):
         # Clear the window
@@ -403,14 +405,14 @@ class EMGRecorderApp:
         frequencies = np.fft.fftfreq(len(amplitude_data))
         return frequencies, fft_values
 
-    def apply_highpass_filter(self, data, lowcut, fs=1000.0, order=4):
+    def apply_highpass_filter(self, data, lowcut, fs=300, order=4):
         nyquist = 0.5 * fs
         low = lowcut / nyquist
         b, a = butter(order, low, btype='high')
         filtered_data = lfilter(b, a, data)
         return filtered_data
 
-    def notch_filter(self, data, f0, fs=1000.0, Q=30.0):
+    def notch_filter(self, data, f0, fs=300):
         nyquist = 0.5 * fs
         normal_cutoff = f0 / nyquist
         b, a = iirfilter(2, [normal_cutoff - 1e-3, normal_cutoff + 1e-3], btype='bandstop')
@@ -628,95 +630,50 @@ class EMGRecorderApp:
         unique_users = df['Username'].unique()
         print(unique_users)
 
-        # Create testing dataset with one feature vector per user
-        testing_data = []
+        # Create directory to save models if it doesn't exist
+        models_dir = "models"
+        os.makedirs(models_dir, exist_ok=True)
+
+        # Create a dictionary to store classifiers and scalers
+        user_models = {}
+
+        # Train a binary SVM classifier for each user
         for user in unique_users:
-            user_data = df[df['Username'] == user].head(1)  # Select last row for each user
-            testing_data.append(user_data)
+            print(f"Training SVM classifier for user {user}...")
+            
+            # Prepare data for the current user
+            user_df = df.copy()
+            user_df['Label'] = user_df['Username'].apply(lambda u: 'yes' if u == user else 'no')
 
-        testing_df = pd.concat(testing_data)
-        training_df = df.drop(testing_df.index)
+            # Split features and labels
+            X = np.vstack(user_df['Features'])
+            y = user_df['Label']
 
-        # Extract features and labels from training and testing datasets
-        X_train = np.vstack(training_df['Features'])
-        y_train = training_df['Username']
-        X_test = np.vstack(testing_df['Features'])
-        y_test = testing_df['Username']
+            # Standardize the feature values
+            scaler = StandardScaler()
+            X_scaled = scaler.fit_transform(X)
 
-        #print(X_train)
-        #print(y_train)
+            # Train SVM classifier
+            svm_classifier = SVC(probability=True)  # Use probability estimates for confidence
+            svm_classifier.fit(X_scaled, y)
 
-        # Standardize the feature values
-        print("Standardizing feature values...")
-        self.scaler = StandardScaler()
-        X_train_scaled = self.scaler.fit_transform(X_train)
-        X_test_scaled = self.scaler.transform(X_test)
+            # Save trained SVM classifier
+            model_filename = os.path.join(models_dir, f"model_{user}.joblib")
+            joblib.dump(svm_classifier, model_filename)
+            print(f"Trained SVM classifier saved to {model_filename}")
 
-        # Create and train the KNN classifier
-        print("Training KNN classifier...")
-        self.knn_classifier = KNeighborsClassifier(n_neighbors=3, metric='manhattan',algorithm='auto')
-        self.knn_classifier.fit(X_train_scaled, y_train)
+            # Store the scaler for this user
+            scaler_filename = os.path.join(models_dir, f"scaler_{user}.joblib")
+            joblib.dump(scaler, scaler_filename)
+            print(f"Scaler saved to {scaler_filename}")
 
-        # Print training accuracy
-        training_accuracy = self.knn_classifier.score(X_train_scaled, y_train)
-        print(f"Training Accuracy: {training_accuracy}")
+            # Add classifier and scaler to the dictionary
+            user_models[user] = {'classifier': svm_classifier, 'scaler': scaler}
 
-        # Print testing accuracy
-        testing_accuracy = self.knn_classifier.score(X_test_scaled, y_test)
-        print(f"Testing Accuracy: {testing_accuracy}")
+        messagebox.showinfo("Success", "SVM Classifiers Trained Successfully!")
 
-        # Predict on the test set
-        y_pred = self.knn_classifier.predict(X_test_scaled)
-
-        # Calculate F1 score
-        f1 = f1_score(y_test, y_pred, average='weighted')  # You can adjust the 'average' parameter as needed
-
-        print(f"F1 Score: {f1}")
-
-        # Predict on the test set
-        y_pred = self.knn_classifier.predict(X_test_scaled)
-
-        # Calculate confusion matrix
-        conf_matrix = confusion_matrix(y_test, y_pred)
-
-        # Display confusion matrix using seaborn heatmap
-        plt.figure(figsize=(10, 8))
-        sns.heatmap(conf_matrix, annot=True, fmt='g', cmap='Blues', cbar=False)
-        plt.xlabel('Predicted')
-        plt.ylabel('True')
-        plt.title('Confusion Matrix')
-        #plt.show()
-
-        # Calculate False Acceptance Rate (FAR) and False Rejection Rate (FRR)
-        far = conf_matrix.sum(axis=0) - np.diag(conf_matrix)
-        frr = conf_matrix.sum(axis=1) - np.diag(conf_matrix)
-
-        far = far / far.sum()  # Normalize FAR
-        frr = frr / frr.sum()  # Normalize FRR
-
-        print(f"FAR: {far.mean()}")
-        print(f"FRR: {frr.mean()}")
-
-        messagebox.showinfo("Success", "KNN Classifier Trained Successfully!")
-
-        scaler_filename = "standard_scaler.joblib"
-        joblib.dump(self.scaler, scaler_filename)
-        print(f"Trained scaler saved to {scaler_filename}")
-
-        # Save the trained classifier to a file
-        classifier_filename = "knn_classifier.joblib"
-        joblib.dump(self.knn_classifier, classifier_filename)
-        print(f"Trained classifier saved to {classifier_filename}")
-
-
-    def load_classifier(self):
-        classifier_filename = "knn_classifier.joblib"
-        if os.path.exists(classifier_filename):
-            self.knn_classifier = joblib.load(classifier_filename)
-            print(f"Trained classifier loaded from {classifier_filename}")
-            self.load_scaler()  # Load the associated scaler
-        else:
-            print("No trained classifier found. Train the classifier first.")
+        # Return the dictionary of trained classifiers and scalers
+        return user_models
 
     def load_scaler(self):
         scaler_filename = "standard_scaler.joblib"
@@ -726,12 +683,8 @@ class EMGRecorderApp:
         else:
             print("No trained scaler found.")
 
+
     def verify_person(self):
-
-        if not self.knn_classifier:
-            messagebox.showinfo("Error", "Please train the classifier first.")
-            return
-
         user_name = self.user_entry.get()
 
         if not user_name:
@@ -779,16 +732,22 @@ class EMGRecorderApp:
                 except ValueError as e:
                     print(f"Error parsing data: {e}")
 
-        self.load_classifier() 
-
         # Apply filters to the EMG signals
         frequencies, fft_values = self.convert_amplitude_to_frequency(emg_values)
         filtered_data_hp = self.apply_highpass_filter(fft_values, lowcut=5)
         filtered_data_notch = self.notch_filter(filtered_data_hp, f0=60)
         filtered_emg = self.convert_frequency_to_amplitude(frequencies, filtered_data_notch)
 
-         # Calculate RMS for alignment
+        # Calculate RMS for alignment
         rms_values = np.sqrt(np.mean(np.square(filtered_emg)))
+
+        # Load the corresponding scaler for the user
+        scaler_filename = f"models/scaler_{user_name}.joblib"
+        if not os.path.exists(scaler_filename):
+            messagebox.showerror("Error", f"No trained scaler found for user {user_name}")
+            return
+
+        scaler = joblib.load(scaler_filename)
 
         # Align EMG signal using RMS
         emg_values_aligned = filtered_emg + np.abs(rms_values)
@@ -799,36 +758,43 @@ class EMGRecorderApp:
         # Convert aligned EMG signals to feature vector
         features = self.calculate_features(emg_values_aligned)
 
-        # Standardize the feature values
-        features_scaled = self.scaler.transform([features])
+        # Standardize the feature values using the loaded scaler
+        features_scaled = scaler.transform([features])
 
-        # Predict the person using the trained KNN classifier
-        predicted_person = self.knn_classifier.predict(features_scaled)
-        print(predicted_person)
+        # Load the corresponding SVM model for the user
+        model_filename = f"models/model_{user_name}.joblib"
+        if not os.path.exists(model_filename):
+            messagebox.showerror("Error", f"No trained model found for user {user_name}")
+            return
+
+        svm_classifier = joblib.load(model_filename)
+
+        # Predict the person using the trained SVM classifier
+        confidence = svm_classifier.predict_proba(features_scaled)[:, 1]  # Probability of class 'yes'
+        print(f"Confidence level: {confidence[0]}")
 
         self.clear_window()
 
-        self.verification_label = ttk.Label(self.root, text="Verification Result", font=("Helvetica", 14,"bold"), background="white",foreground="green")
+        self.verification_label = ttk.Label(self.root, text="Verification Result", font=("Helvetica", 14, "bold"), background="white", foreground="green")
         self.verification_label.place(relx=0.5, rely=0.1, anchor='center')
 
-        self.result_label = ttk.Label(self.root, text="", font=("Helvetica", 14,"bold"), background="white",foreground="black")
+        self.result_label = ttk.Label(self.root, text="", font=("Helvetica", 14, "bold"), background="white", foreground="black")
         self.result_label.place(relx=0.5, rely=0.3, anchor='center')
 
-        self.image_label = tk.Label(self.root,background="white")
+        self.image_label = tk.Label(self.root, background="white")
         self.image_label.place(relx=0.5, rely=0.47, anchor='center')
 
         self.back_button = ttk.Button(self.root, text="Back", command=self.show_main_window)
         self.back_button.place(relx=0.5, rely=0.65, anchor='center', width=150, height=35)
-    
-        if predicted_person == user_name:
+
+        if confidence[0] > 0.7:
             image_path = 'tick2.png'
             audio_path = 'myoauthintro.mp3'
-            self.result_label.config(text=f"Authentication success. Identified Person: {predicted_person}")
+            self.result_label.config(text=f"Authentication success. Identified Person: {user_name}")
         else:
             image_path = 'wrong.png'
             audio_path = 'wrong.mp3'
             self.result_label.config(text="Authentication failed")
-
 
         original_image = Image.open(image_path)
         resized_image = original_image.resize((100, 100), Image.LANCZOS)
@@ -838,7 +804,9 @@ class EMGRecorderApp:
         # Play audio
         pygame.init()
         pygame.mixer.music.load(audio_path)  # Replace with your audio file path
-        pygame.mixer.music.play(0,0,1)
+        pygame.mixer.music.play(0, 0, 1)
+
+
 
         
 if __name__ == "__main__":

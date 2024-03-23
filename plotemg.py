@@ -4,11 +4,11 @@ import numpy as np
 
 def plot_emg():
     
-    df = pd.read_csv("all_users_filtered_emg_data.csv")
+    df = pd.read_csv("all_users_emg_data.csv")
 
     unique_users = df['Username'].unique()
     for user in unique_users:
-        if user == "noel1" or user == "niya1" or user == "nikhil1":
+        if user == "noel1" or user == "niya1" or user == "nikhil1" or user=="joel1":
             user_data = df[df['Username'] == user]
             plt.plot(user_data['timestamps'], user_data['emgvalues'], label=user)
 
@@ -25,7 +25,7 @@ def plot_frequency_domain_not_filtered():
 
     unique_users = df['Username'].unique()
     for user in unique_users:
-        if user == "noel1" or user == "niya1" or user == "nikhil1" or user=="joel1":  # Filter specific users if needed
+        if user == "noel1" or user == "niya1" or user == "nikhil1":  # Filter specific users if needed
             user_data = df[df['Username'] == user]
             emg_values = user_data['emgvalues']
             fft_values = np.fft.fft(emg_values)
@@ -48,7 +48,7 @@ def plot_frequency_domain_filtered():
     
     unique_users = df['Username'].unique()
     for user in unique_users:
-        if user == "noel1" or user == "niya1" or user == "nikhil1" or user=="joel1":  # Filter specific users if needed
+        if user == "noel1" or user == "niya1" or user == "nikhil1" :  # Filter specific users if needed
             user_data = df[df['Username'] == user]
             emg_values = user_data['emgvalues']
             fft_values = np.fft.fft(emg_values)
@@ -63,6 +63,6 @@ def plot_frequency_domain_filtered():
 
     plt.show()
 
-plot_frequency_domain_not_filtered()
-plot_frequency_domain_filtered()
-#plot_emg()
+#plot_frequency_domain_not_filtered()
+#plot_frequency_domain_filtered()
+plot_emg()
